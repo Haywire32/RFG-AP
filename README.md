@@ -5,12 +5,12 @@ The mod currently has 164 checks, where 83 are filler salvage and 81 are useful 
 ### Location checks
 - Story missions
 - Guerrilla actions:
-- Demolition Masters
-- Transporter
-- House Arrest
-- Guerrilla Raid
-- Heavy Metal
-- Collateral Damage
+  - Demolition Masters
+  - Transporter
+  - House Arrest
+  - Guerrilla Raid
+  - Heavy Metal
+  - Collateral Damage
 
 ### Item rewards
 - Weapons
