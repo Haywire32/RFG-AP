@@ -36,7 +36,7 @@ Open Archipelago Launcher - run "Red Faction Guerrilla Client"
 Connect to the Archipelago server and enter slot name, then launch the game normally on Steam.
 
 ### Feedback or other questions
-I'd love feedback on design choices and bugs in the [Red Faction Guerilla channel](https://discord.com/channels/731205301247803413/1537482950676058262) in the [Archipelago discord](https://discord.gg/8Z65BR2)
+I'd love feedback in the [Red Faction Guerilla channel](https://discord.com/channels/731205301247803413/1537482950676058262) in the [Archipelago discord](https://discord.gg/8Z65BR2)
 
 The current version is still unstable and most likely has bugs.
 
