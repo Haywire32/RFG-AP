@@ -1,0 +1,56 @@
+# Red Faction: Guerrilla Re-Mars-tered — Archipelago 0.5.0
+# Change the player name before generating. Weights of 0 disable a choice;
+# weights of 50 select it. If several choices have weight 50, one is chosen
+# randomly when generating the seed.
+name: Player{number}
+
+
+description: Red Faction Guerrilla 0.5.0
+game:
+  "Red Faction: Guerrilla Re-Mars-tered": 50
+requires:
+  version: "0.6.7"
+  game:
+    "Red Faction: Guerrilla Re-Mars-tered": "0.5.0"
+
+"Red Faction: Guerrilla Re-Mars-tered":
+  # Complete a set amount of story missions before Mars Attacks becomes available.
+  # The finale does not require the Mount Vogel Sector item.
+  story_missions_required:
+    0: 0
+    1: 0
+    2: 0
+    3: 0
+    4: 0
+    5: 0
+    6: 0
+    7: 0
+    8: 0
+    9: 0
+    10: 0
+    11: 0
+    12: 0
+    13: 0
+    14: 0
+    15: 0
+    16: 0
+    17: 0
+    18: 0
+    19: 0
+    20: 50
+
+  # All safehouses are visible from the start. Normally Guerrilla Express must
+  # be received from a check reward before fast travel can be used. Enable this to start with it.
+  start_with_fast_travel:
+    "false": 50
+    "true": 0
+
+  # Standard Archipelago options.
+  progression_balancing:
+    0: 0
+    50: 50
+    99: 0
+  accessibility:
+    full: 50
+    minimal: 0
+
