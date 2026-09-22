@@ -8,6 +8,10 @@ from .progression_catalog import COUNTED_STORIES, FINAL_STORY
 BASES = {2:12,3:17,6:16,9:11,11:13,14:14,15:15,25:4}
 
 def identity(seed, team, slot):
+    if not isinstance(seed,str) or not seed.strip():
+        raise ValueError('Waiting for a valid Archipelago seed name; no progress will be synchronized')
+    if type(team) is not int or team<0 or type(slot) is not int or slot<1:
+        raise ValueError('Waiting for a valid Archipelago team and slot')
     return hashlib.sha256(f"RFG-Shopsanity-v2\n{seed}\n{team}\n{slot}".encode()).hexdigest()
 
 def snapshot(seed, team, slot, data, items, missing, checked):

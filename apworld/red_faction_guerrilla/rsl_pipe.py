@@ -12,6 +12,11 @@ kernel=ctypes.WinDLL('kernel32',use_last_error=True)
 kernel.WaitNamedPipeW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD]
 kernel.WaitNamedPipeW.restype=wintypes.BOOL
 
+def connection_error(error):
+    if error==2:
+        return ConnectionError('Start Red Faction Guerrilla with the mod installed. The game connection is not available yet.')
+    return ctypes.WinError(error)
+
 class RslPipe:
     def __init__(self, name='RFGArchipelago'):
         self.name=name
@@ -33,12 +38,16 @@ class RslPipe:
             # A busy/denied current runtime must never silently connect to a
             # different loader. Only older seeds can use the legacy endpoint.
             if error!=2 or not self.fallback:
-                raise ctypes.WinError(error)
+                raise connection_error(error)
             path='\\\\.\\pipe\\'+self.fallback
             if not kernel.WaitNamedPipeW(path,1500):
-                raise ctypes.WinError(ctypes.get_last_error())
-        self.handle=win32file.CreateFile(path,win32con.GENERIC_READ|win32con.GENERIC_WRITE,
-            0,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_OVERLAPPED,None)
+                raise connection_error(ctypes.get_last_error())
+        try:
+            self.handle=win32file.CreateFile(path,win32con.GENERIC_READ|win32con.GENERIC_WRITE,
+                0,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_OVERLAPPED,None)
+        except pywintypes.error as ex:
+            if ex.winerror==2: raise connection_error(2) from None
+            raise
 
     def close(self):
         if self.handle is not None:

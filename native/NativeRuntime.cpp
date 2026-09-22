@@ -76,7 +76,13 @@ void* __cdecl AddItem(void* human,inv_item_info* info,int count,int ammo,int slo
     if(configured && definition>=0 && definition<96 && WeaponTableReady())
         starting=Globals::WeaponInfos[definition].weapon_inv_item_info;
     bool suppress=false;
-    info=loadout.Choose(human,info,slot,caller,configured,starting,suppress,ammo);
+    inv_item_info* hammer=nullptr;
+    if(configured && caller==0x00adafd8 && slot==3 && info && info->name &&
+       std::strcmp(info->name,"golden_hammer")==0) {
+        using FindInfoFn=inv_item_info*(__cdecl*)(const char*);
+        hammer=reinterpret_cast<FindInfoFn>(Globals::ModuleBase+0x6125d0)("sledgehammer");
+    }
+    info=loadout.Choose(human,info,slot,caller,configured,starting,suppress,ammo,hammer);
     return suppress ? nullptr : originalAdd(human,info,count,ammo,slot,a,b,c);
 }
 

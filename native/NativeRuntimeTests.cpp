@@ -71,6 +71,12 @@ int main(int argc,char** argv) {
         }
     }
     Check(policy.Choose(&npc,&charge,1,0x00adafd8,true,&starting,suppress)==&charge && !suppress,"NPC inventory unaffected");
+    inv_item_info golden{"golden_hammer"};
+    LoadoutPolicy goldenPolicy;
+    Check(goldenPolicy.Choose(&human,&golden,3,0x00adafd8,true,&starting,suppress,-1,&hammer)==&hammer,"profile golden hammer replaced only at AP intro");
+    Check(goldenPolicy.Choose(&human,&charge,1,0x00adafd8,true,&starting,suppress)==&starting,"golden hammer intro still receives AP starter");
+    Check(goldenPolicy.Choose(&human,&golden,3,0x00ac4090,true,&starting,suppress,-1,&hammer)==&golden,"later golden hammer equip preserved");
+    Check(goldenPolicy.Choose(&human,&golden,3,0x00adafd8,false,nullptr,suppress,-1,&hammer)==&golden,"unconfigured vanilla intro preserved");
 
     const auto pipeName=std::wstring(L"\\\\.\\pipe\\RFGArchipelago-Test-")+std::to_wstring(GetCurrentProcessId());
     std::thread([pipeName]{PipeServer(pipeName);}).detach();

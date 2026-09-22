@@ -63,6 +63,7 @@ std::set<int> completedActivities;
 std::array<Entry, 128> entries{};
 std::array<int, 128> offerLevels{}; // zero is a vanilla/local equip action
 std::string journalPath;
+int equippedBackpack=-1;
 std::string lastPayload;
 Player* lastPlayer = nullptr;
 int lastPlayTime = -1;
@@ -128,6 +129,8 @@ unsigned char* Level(int row, int level) {
     return def && level >= 0 && level < def[5] ? def + 0x18 + 0x20 * level : nullptr;
 }
 bool OwnedCosmetic(int row) { return Cosmetic(row) && state.owned[row] > 0; }
+bool BackpackRow(int row) { return row==0 || (row>=53 && row<62); }
+bool OwnedEquip(int row) { return OwnedCosmetic(row) || (row==0 && state.enabled[0] && state.owned[0]>0); }
 int BaseDefinition(int row) {
     switch(row) {
     case 2:return 12; case 3:return 17; case 6:return 16; case 9:return 11;
@@ -142,6 +145,7 @@ bool WriteJournal(const Masks& checks, const std::map<int,int>& salvage) {
         j["purchased"] = checks;
         j["stories"] = completedStories;
         j["activities"] = completedActivities;
+        j["equipped_backpack"] = equippedBackpack;
         j["salvage"] = Json::object();
         for(const auto& item:salvage) j["salvage"][std::to_string(item.first)] = item.second;
         const auto bytes = j.dump();
@@ -156,7 +160,7 @@ bool WriteJournal(const Masks& checks, const std::map<int,int>& salvage) {
     } catch(...) { return false; }
 }
 bool LoadJournal() {
-    purchased.fill(0); appliedSalvage.clear(); completedStories.clear(); completedActivities.clear();
+    purchased.fill(0); appliedSalvage.clear(); completedStories.clear(); completedActivities.clear(); equippedBackpack=-1;
     try {
 #ifdef AP_STANDALONE_RUNTIME
         const auto directory = Globals::GetEXEPath(false) + "RFGArchipelago/Shopsanity/";
@@ -179,6 +183,8 @@ bool LoadJournal() {
         std::ifstream f(readPath);
         Json j; f >> j;
         if(j.at("version") != 2 || j.at("session") != state.session) return false;
+        equippedBackpack=j.value("equipped_backpack",-1);
+        if(equippedBackpack!=-1 && !BackpackRow(equippedBackpack)) return false;
         purchased = j.at("purchased").get<Masks>();
         for(int row=0;row<Rows;++row) if(purchased[row] & ~CatalogMask(row)) return false;
         if(j.find("stories")!=j.end()) {
@@ -233,7 +239,9 @@ void __fastcall MapRender(void* map,void*) {
     const auto text=StoryTrackerText();
     const auto* screen=Address<int*(__cdecl*)()>(0x0089bdb0)();
     const int font=*Address<int*>(0x0163f164);
-    if(screen[0]<=0 || screen[1]<=0 || font<0) return;
+    // Font handles can be tagged negative values (the live map uses
+    // 0x80000004). Resolve them through the engine instead of testing the sign.
+    if(screen[0]<=0 || screen[1]<=0 || !Address<void*(__cdecl*)(int)>(0x00594140)(font)) return;
     const int width=Address<int(__cdecl*)(const wchar_t*,int)>(0x008b4a80)(text.c_str(),font);
     float scale=*Address<float*>(0x01661264);
     if(scale<=0 || width<=0) return;
@@ -535,6 +543,7 @@ void ReconcileRoadBarriers() {
     }
 }
 int Price(unsigned char* info,int row,bool paid) {
+    if(!paid && OwnedEquip(row)) return 0;
     // The native price function uses its this pointer for price/difficulty, and
     // row only for already-owned cosmetics. Row 1 has no ownership discount.
     return Address<PriceFn>(0x00775840)(info,paid && Cosmetic(row) ? 1 : row,0);
@@ -587,7 +596,7 @@ void __cdecl Build() {
                 for(int i=0;i<retainedCount;++i) if(retained[i].row==0) entries[count++]=retained[i];
             // Selecting an AP-owned cosmetic is independent of buying its check.
             // Both entries may coexist; the selection entry always costs zero.
-            if(OwnedCosmetic(row) && live->upgrades[row].current_level==0) {
+            if(OwnedEquip(row) && live->upgrades[row].current_level==0) {
                 auto* info=Level(row,1);
                 if(info) entries[count++]=MakeEntry(row,info,true,false);
             }
@@ -620,7 +629,15 @@ int __fastcall Apply(PlayerMetadata* metadata,void*,int row,char automatic,char 
         return 1;
     const int level=offerLevels[index];
     if(!level) {
-        if(CatalogMask(row) && !(row==0 && !state.enabled[0]) && !OwnedCosmetic(row)) return 2;
+        if(CatalogMask(row) && !(row==0 && !state.enabled[0]) && !OwnedEquip(row)) return 2;
+        if(BackpackRow(row) && OwnedEquip(row)) {
+            const int previous=equippedBackpack;
+            equippedBackpack=row;
+            if(!WriteJournal(purchased,appliedSalvage)) {equippedBackpack=previous;return 2;}
+            // Selection is free and independent of the paid AP check. Metadata
+            // is applied on the next frame, without native purchase side effects.
+            return 5;
+        }
         return originalApply(metadata,row,automatic,freeGrant);
     }
     auto* info=Level(row,level);
@@ -750,9 +767,17 @@ void Reconcile(Player* player,bool force) {
     auto* metadata=Metadata();
     if(!metadata || metadata!=&player->Metadata) return;
     bool refresh=force;
+    const int selected=equippedBackpack>=0 && OwnedEquip(equippedBackpack) ? equippedBackpack : -1;
     for(int row=0;row<Rows;++row) {
         if(row==0 && !state.enabled[0]) continue; // old seed compatibility
         if(!CatalogMask(row) && row!=25) continue;
+        if(BackpackRow(row)) {
+            metadata->upgrades[row].current_level=static_cast<char>(row==selected ? state.owned[row] : 0);
+            if(state.owned[row]) metadata->upgrades[row].availability_bitfield|=2;
+            Globals::ApGrantedUpgradeLevels[row]=state.owned[row];
+            Globals::ApGrantedUpgradeRows[row]=state.owned[row]>0;
+            continue;
+        }
         if(Cosmetic(row)) {
             if(state.owned[row]) metadata->upgrades[row].availability_bitfield |= 2;
             if(!state.owned[row] && metadata->upgrades[row].current_level!=0)
@@ -789,8 +814,21 @@ void Reconcile(Player* player,bool force) {
         }
     }
     *Address<unsigned short*>(0x03017c50)=backpackMask;
+    if(state.enabled[0]) *Address<unsigned char*>(0x03017c52)=static_cast<unsigned char>(state.owned[0]);
     *Address<unsigned int*>(0x030266b0)=hammerMask;
     *Address<unsigned int*>(0x030266b4)=0;
+    if(state.enabled[0]) {
+        // Native backpack removal clears the attachment, effects and player
+        // pointer. Clearing upgrade levels alone leaves the model on Mason.
+        auto* pack=*reinterpret_cast<void**>(reinterpret_cast<unsigned char*>(player)+0x1170);
+        if(selected<0 && pack) {
+            using RemovePackFn=void(__thiscall*)(void*,char);
+            Address<RemovePackFn>(0x009df480)(pack,1);
+        }
+        // The original player frame equips the selected metadata row. Reset
+        // its cached type after reload/removal so it can recreate the model.
+        if(force || selected<0) *Address<int*>(0x01694490)=-1;
+    }
     if(refresh) {
         originalCabinet();
         for(int def=0;def<96;++def) if(state.weapons[def])
@@ -904,8 +942,8 @@ void Frame(Player* player) {
     ReconcileSafehouses();
     ReconcileRoadBarriers();
     ShowNotice();
-    if(changed || reload) Logger::Log("AP SHOP V2 READY: session={0}, capacity={1}, salvage={2}.\n",
-        state.session,2+state.owned[1],player->Metadata.Salvage);
+    if(changed || reload) Logger::Log("AP SHOP V2 READY: session={0}, capacity={1}, salvage={2}, story_missions={3}/{4}.\n",
+        state.session,2+state.owned[1],player->Metadata.Salvage,StoryCount(),state.storyRequired);
     for(const auto& item:state.salvage) {
         if(appliedSalvage.count(item.first)) continue;
         auto next=appliedSalvage; next.insert(item);

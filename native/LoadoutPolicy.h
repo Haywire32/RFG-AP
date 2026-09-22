@@ -8,11 +8,15 @@ struct LoadoutPolicy {
     void* introPlayer=nullptr;
     unsigned int openingGrantMask=0;
     inv_item_info* Choose(void* human,inv_item_info* info,int slot,uintptr_t caller,
-                         bool configured,inv_item_info* starting,bool& suppress,int ammo=-1) {
+                         bool configured,inv_item_info* starting,bool& suppress,int ammo=-1,
+                         inv_item_info* defaultHammer=nullptr) {
         suppress=false;
         if(!info || !info->name) return info;
-        if(caller==0x00adafd8 && slot==3 && std::strcmp(info->name,"sledgehammer")==0) {
+        const bool golden=std::strcmp(info->name,"golden_hammer")==0;
+        if(caller==0x00adafd8 && slot==3 && (golden || std::strcmp(info->name,"sledgehammer")==0)) {
             if(introPlayer!=human) {introPlayer=human;openingGrantMask=0;}
+            // A vanilla profile reward must not select an AP cosmetic at spawn.
+            if(configured && golden && defaultHammer) return defaultHammer;
         }
         if(!configured || human!=introPlayer) return info;
         if(caller==0x00adafd8 && std::strcmp(info->name,"charge_placer")==0 && starting)

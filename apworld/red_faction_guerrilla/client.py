@@ -81,6 +81,29 @@ class RFGContext(CommonContext):
         self.log_session=None
         self.log_partial=''
 
+    def reset_server_state(self):
+        super().reset_server_state()
+        # CommonClient may resend cached checks during Connected, before our
+        # callback runs. Recover same-run checks from its journal after binding
+        # the new RoomInfo instead of carrying those caches across connections.
+        self.seed_name=None
+        self.slot_data=None
+        self.history_ready=False
+        self.locations_checked.clear()
+        self.locations_scouted.clear()
+        self.checked_locations.clear()
+        self.missing_locations.clear()
+        self.finished_game=False
+        self.local_checks.clear()
+        self.session=None
+        self.last_snapshot=None
+        self.current_snapshot=None
+        self.goal_reported=False
+        self.hud_events.clear()
+        self.hud_session=None
+        self.finale_notices.clear()
+        self.reset_log_reader()
+
     async def server_auth(self, password_requested=False):
         if password_requested and not self.password: await super().server_auth(password_requested)
         await self.get_username()
@@ -100,11 +123,26 @@ class RFGContext(CommonContext):
             self.ui.title=self.ui.base_title
 
     def on_package(self, cmd, args):
-        if cmd=='Connected':
-            identity=(self.seed_name,self.team,self.slot)
-            if self.hud_session!=identity:
+        if cmd=='RoomInfo':
+            seed=args.get('seed_name')
+            if not isinstance(seed,str) or not seed.strip():
+                self.history_ready=False
+                raise ValueError('Server did not supply a valid seed name; progress synchronization is blocked')
+            if self.seed_name and self.seed_name!=seed:
+                self.history_ready=False
+                raise ValueError('Server changed seeds during a connection; reconnect before synchronizing progress')
+            self.seed_name=seed
+        elif cmd=='Connected':
+            session=identity(self.seed_name,self.team,self.slot)
+            logger.info('RF:G seed %s, team %s, slot %s; progress journal %s',self.seed_name,self.team,self.slot,session)
+            if self.checked_locations:
+                logger.info('This server slot already has %s completed checks. Starting a new campaign does not reset this room or its received items.',len(self.checked_locations))
+                if FINAL_STORY in self.checked_locations:
+                    logger.warning('This room already has the final mission checked. Use a fresh room and a new campaign to test progression from the start.')
+            connection_identity=(self.seed_name,self.team,self.slot)
+            if self.hud_session!=connection_identity:
                 self.hud_events.clear()
-                self.hud_session=identity
+                self.hud_session=connection_identity
             self.slot_data=args['slot_data']
             self.pipe.select('RFGArchipelago', fallback='RSLMainPipe' if self.slot_data.get('progression_protocol')!=2 else None)
             self.history_ready=False
@@ -181,10 +219,14 @@ class RFGContext(CommonContext):
                 if found and found[1] in STORY: self.local_checks.add(STORY[found[1]])
 
     async def report_goal(self):
+        if not self.seed_name or self.slot is None or not self.slot_data or not self.history_ready: return
         if self.slot_data.get('progression_protocol') in (1,2) and not self.goal_reported and FINAL_STORY in (self.local_checks | set(self.checked_locations)):
             await self.send_msgs([{'cmd':'StatusUpdate','status':ClientStatus.CLIENT_GOAL}])
             self.goal_reported=True
-            logger.info('Mars Attacks completed. Archipelago goal reached!')
+            if FINAL_STORY in self.local_checks:
+                logger.info('Mars Attacks completed. Archipelago goal reached!')
+            else:
+                logger.info('Archipelago goal restored from this room\'s existing final-mission check.')
 
     async def poll_game(self):
         if self.slot is None or not self.history_ready or not self.game_folder: return
