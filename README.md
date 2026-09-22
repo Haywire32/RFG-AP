@@ -19,9 +19,8 @@ The mod currently has 164 checks, where 83 are filler salvage and 81 are useful 
 - Salvage
 - Character upgrades and unlocks
 
-
 ### Download
-[Download can be found here.
+[Download can be found here.](https://github.com/Haywire32/RFG-AP/releases)
 
 ### How to install
 Install Archipelago version 0.6.7
@@ -43,7 +42,6 @@ The current version is still unstable and most likely has bugs.
 
 ### Future plans
 More checks and items.
-Brotherhood knight scrolls giving hints
 
 ### Disclaimer
 AI assistance was used for reverse engineering and hook implementation. Item and logic mapping, in-game testing, verification, and design decisions were done manually by me.
