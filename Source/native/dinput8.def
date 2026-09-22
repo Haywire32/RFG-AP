@@ -1,0 +1,8 @@
+LIBRARY dinput8
+EXPORTS
+    DirectInput8Create=_APDirectInput8Create@20 @1
+    DllCanUnloadNow=_APDllCanUnloadNow@0 @2 PRIVATE
+    DllGetClassObject=_APDllGetClassObject@12 @3 PRIVATE
+    DllRegisterServer=_APDllRegisterServer@0 @4 PRIVATE
+    DllUnregisterServer=_APDllUnregisterServer@0 @5 PRIVATE
+    GetdfDIJoystick=_APGetdfDIJoystick@0 @6
