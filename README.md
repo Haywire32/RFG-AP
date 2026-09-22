@@ -1,5 +1,6 @@
 ### Red Faction Guerrilla Archipelago randomizer
 This mod is a randomizer for Red Faction Guerrilla Re-Mars-tered edition on steam. Sector unlocks are randomized and the goal is to beat a set amount of story missions to unlock the finale "Mars Attacks".
+
 The mod currently has 164 checks, where 83 are filler salvage and 81 are useful items.
 
 ### Location checks
