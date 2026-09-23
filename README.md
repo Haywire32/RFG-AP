@@ -12,6 +12,7 @@ The mod currently has 164 checks, where 83 are filler salvage and 81 are useful 
   - Guerrilla Raid
   - Heavy Metal
   - Collateral Damage
+- Shopsanity - all purchases from the upgrade bench are checks
 
 ### Item rewards
 - Weapons
