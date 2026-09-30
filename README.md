@@ -13,13 +13,15 @@ The mod currently has 164 checks, where 83 are filler salvage and 81 are useful 
   - Heavy Metal
   - Collateral Damage
 - Shopsanity - all purchases from the upgrade bench are checks
+- 300 ore deposits, 54 billboards, 36 radio tags and 419 supply crates as optional checks
 
 ### Item rewards
-- Weapons
-- Backpacks
+- Weapons and progressive upgrades
+- Backpacks progressive upgrades
 - Hammer skins
 - Salvage
-- Character upgrades and unlocks
+- Character upgrades and unlocks (armor, fast travel, and so on)
+- 28 vehicles
 
 ### Download
 [Download can be found here.](https://github.com/Haywire32/RFG-AP/releases)
