@@ -44,8 +44,5 @@ I'd love feedback in the [Red Faction Guerilla channel](https://discord.com/chan
 
 The current version is still unstable and most likely has bugs.
 
-### Future plans
-More checks and items.
-
 ### Disclaimer
 AI assistance was used for reverse engineering and hook implementation. Item and logic mapping, in-game testing, verification, and design decisions were done manually by me.
