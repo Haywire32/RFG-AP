@@ -2,7 +2,10 @@
 import hashlib
 from collections import Counter
 from .catalog import SHOP
-from . import LOCATIONS
+from .destruction_catalog import TARGET_IDS
+from .collectible_catalog import COLLECTIBLE_IDS
+from .vehicle_catalog import VEHICLES
+from . import LOCATIONS, ACTIVITY_INTERNALS
 from .progression_catalog import COUNTED_STORIES, FINAL_STORY
 
 BASES = {2:12,3:17,6:16,9:11,11:13,14:14,15:15,25:4}
@@ -28,11 +31,24 @@ def snapshot(seed, team, slot, data, items, missing, checked):
     requirement = data.get('story_missions_required', 20)
     if type(requirement) is not int or not 0<=requirement<=20: raise ValueError('Invalid story requirement')
     counts, salvage = Counter(), {}
+    vehicles, ammo = set(), [0]*96
+    recharge, power = 0, 0
     for index, item in enumerate(items):
         sector=data.get('sector_items',{}).get(str(item))
         if sector is not None:
             if type(sector) is not int or not 1<=sector<=6: raise ValueError('Invalid sector item')
             sectors |= 1<<sector
+            continue
+        vehicle=data.get('vehicle_items',{}).get(str(item))
+        if vehicle is not None:
+            if vehicle not in VEHICLES.values(): raise ValueError('Invalid vehicle item')
+            vehicles.add(vehicle)
+            continue
+        backpack=data.get('backpack_upgrade_items',{}).get(str(item))
+        if backpack is not None:
+            if backpack == 'Progressive Backpack Recharge': recharge=min(5,recharge+1)
+            elif backpack == 'Progressive Backpack Power': power=min(5,power+1)
+            else: raise ValueError('Invalid backpack upgrade')
             continue
         family=data['weapon_sequences'].get(str(item))
         if family:
@@ -41,7 +57,13 @@ def snapshot(seed, team, slot, data, items, missing, checked):
             # completed family further or stop unrelated checks from syncing.
             if copy>=len(family['indices']): continue
             value=family['indices'][copy]
-            command=7 if family['name']=='Progressive Remote Charge Capacity' else 5 if family['name']=='Gauss Rifle Registry Test' else 2
+            if data.get('protocol_version',0)>=6 and 103 <= value <= 118:
+                ammo[value-100]=min(5,ammo[value-100]+1)
+                continue
+            if data.get('protocol_version',0)>=6 and 203 <= value <= 218:
+                command, value = 5, value-200
+            else:
+                command=7 if family['name']=='Progressive Remote Charge Capacity' else 5 if family['name']=='Gauss Rifle Registry Test' else 2
         else:
             direct=data['direct_items'].get(str(item))
             if direct is None: raise ValueError(f'Unknown RF:G item {item}')
@@ -69,6 +91,23 @@ def snapshot(seed, team, slot, data, items, missing, checked):
         if location in checked: paid[row]|=1<<level
     result = dict(protocol=3 if progression else 2,session=identity(seed,team,slot),start_definition=start['definition'],
                 start_row=start['upgrade'],enabled=enabled,checked=paid,owned=owned,weapons=weapons,salvage=salvage)
+    if data.get('protocol_version',0)>=6:
+        collectibles=data.get('collectible_checks',[])
+        if not isinstance(collectibles,list) or any(type(i) is not int or i not in COLLECTIBLE_IDS for i in collectibles):
+            raise ValueError('Invalid collectible catalog')
+        result.update(features_version=6, vehicles=sorted(vehicles), ammo=ammo,
+                      backpack_recharge=recharge, backpack_power=power,
+                      shop_tiers=True,
+                      collectible_checks=sorted(set(collectibles) & (set(missing)|set(checked))))
+    targets=data.get('destruction_checks',[])
+    if not isinstance(targets,list) or any(type(t) is not int or t not in TARGET_IDS for t in targets):
+        raise ValueError('Invalid destruction catalog')
+    if targets and not progression: raise ValueError('Destruction checks require sector progression')
+    result['destruction_checks']=sorted(set(targets) & (set(missing) | set(checked)))
+    result['checked_targets']=sorted(set(targets) & set(checked))
+    visibility=data.get('shop_reward_visibility',True)
+    if type(visibility) is not bool: raise ValueError('Invalid shop reward visibility')
+    result['shop_reward_visibility']=visibility
     if progression:
         result['progression'] = dict(version=progression,sectors=sectors,required=requirement,
                                      stories=sorted(set(checked) & (COUNTED_STORIES | {867530217, FINAL_STORY})))
@@ -82,6 +121,14 @@ def journal_checks(journal, session):
     stories=journal.get('stories',[])
     if any(not 867530200<=n<=867530221 for n in stories): raise ValueError('Invalid story check')
     activities=journal.get('activities',[])
-    allowed={id for name,id in LOCATIONS.items() if not name.startswith(('Shop:', 'Story Mission:'))}
+    allowed=set(ACTIVITY_INTERNALS)
     if any(n not in allowed for n in activities): raise ValueError('Invalid activity check')
-    return result | set(stories) | set(activities)
+    targets=journal.get('destroyed_targets',[])
+    if any(type(t) is not int or t not in TARGET_IDS for t in targets): raise ValueError('Invalid destroyed target')
+    completed=journal.get('destruction_checks',[])
+    if any(type(t) is not int or t not in targets for t in completed): raise ValueError('Invalid destruction check')
+    collected=journal.get('collected_objects',[])
+    collectibles=journal.get('collectible_checks',[])
+    if any(type(t) is not int or t not in COLLECTIBLE_IDS for t in collected): raise ValueError('Invalid collectible history')
+    if any(type(t) is not int or t not in collected for t in collectibles): raise ValueError('Invalid collectible check')
+    return result | set(stories) | set(activities) | set(completed) | set(collectibles)

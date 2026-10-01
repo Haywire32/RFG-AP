@@ -11,6 +11,36 @@ void Check(bool ok,const char* description) {
     if(!ok) {fprintf(stderr,"FAILED: %s (Windows error %lu)\n",description,GetLastError());std::exit(1);}
 }
 std::atomic<int> acceptedSnapshots{0};
+bool ExerciseCrashObserver() {
+    __try {
+        const ULONG_PTR parameters[]={0,0x1234};
+        RaiseException(EXCEPTION_ACCESS_VIOLATION,0,2,parameters);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return true;}
+    return false;
+}
+void CheckTargetIconAbi(const fs::path& executable) {
+    std::ifstream input(executable,std::ios::binary);
+    IMAGE_DOS_HEADER dos{};input.read(reinterpret_cast<char*>(&dos),sizeof(dos));
+    input.seekg(dos.e_lfanew);
+    IMAGE_NT_HEADERS32 pe{};input.read(reinterpret_cast<char*>(&pe),sizeof(pe));
+    std::vector<IMAGE_SECTION_HEADER> sections(pe.FileHeader.NumberOfSections);
+    input.read(reinterpret_cast<char*>(sections.data()),sections.size()*sizeof(IMAGE_SECTION_HEADER));
+    for(DWORD address:{0x00862da3u,0x00862db0u,0x00862dbdu,0x00862dcau}) {
+        const DWORD rva=address-pe.OptionalHeader.ImageBase;
+        bool matched=false;
+        for(const auto& section:sections) if(rva>=section.VirtualAddress && rva-section.VirtualAddress+3<=section.SizeOfRawData) {
+            input.seekg(section.PointerToRawData+rva-section.VirtualAddress);
+            unsigned char code[3]{};input.read(reinterpret_cast<char*>(code),sizeof(code));
+            matched=input.good() && code[0]==0xc2 && code[1]==4 && code[2]==0;
+            break;
+        }
+        Check(matched,"game target classifier returns RET 4: callee owns argument cleanup");
+    }
+}
+}
+namespace Garage {
+bool Install(IHookManager&) {return true;}
+void Frame(Player*) {}
 }
 namespace ApShop {
 bool Install(IHookManager&) {return false;}
@@ -23,8 +53,24 @@ bool AcceptSnapshot(const std::string& payload,std::string& error) {
 }
 int main(int argc,char** argv) {
     Check(argc==3,"arguments: standalone DLL and supported RF:G executable");
-    Check(SupportedExecutable(fs::path(argv[2])),"supported executable SHA256 accepted");
+    std::string fingerprint;
+    Check(SupportedExecutable(fs::path(argv[2]),&fingerprint),"supported executable SHA256 accepted");
+    Check(fingerprint=="0D52039E7F2D3F25A4BE52A2ABA83919456FB3F00E52E75051726247471A2DF4","diagnostics expose the verified executable fingerprint");
+    Check(!SupportedExecutable(fs::path(argv[2]).parent_path()/L"missing"/L"rfg.exe",&fingerprint),"unreadable executable rejected");
+    Check(fingerprint.find("unavailable")!=std::string::npos,"read failures do not report a fabricated hash");
+    CheckTargetIconAbi(fs::path(argv[2]));
     Check(!SupportedExecutable(fs::path(argv[0])),"foreign executable rejected");
+    const auto diagnosticPath=fs::path(argv[0]).parent_path()/"test-crash.log";
+    CrashDiagnostics::Start(diagnosticPath.c_str(),GetModuleHandleW(nullptr));
+    Check(CrashDiagnostics::registration!=nullptr,"local crash observer installed");
+    Check(ExerciseCrashObserver(),"observer leaves exception handling to the application");
+    Check(!CrashDiagnostics::FatalCode(0xe06d7363),"ordinary C++ exceptions excluded");
+    Check(CrashDiagnostics::records==1,"single fatal observation recorded");
+    RemoveVectoredExceptionHandler(CrashDiagnostics::registration);
+    CrashDiagnostics::registration=nullptr;CloseHandle(CrashDiagnostics::file);CrashDiagnostics::file=INVALID_HANDLE_VALUE;
+    std::ifstream diagnostic(diagnosticPath);
+    const std::string observation((std::istreambuf_iterator<char>(diagnostic)),{});
+    Check(observation.find("Exception=C0000005")!=std::string::npos && observation.find("Address=00001234")!=std::string::npos,"fault code and access address survive application handler");
 
     const auto dll=LoadLibraryA(argv[1]);
     Check(dll!=nullptr,"standalone DLL loads without RSL");

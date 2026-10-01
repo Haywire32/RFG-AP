@@ -1,7 +1,33 @@
 """Find a local Steam installation without bundling a launcher or game files."""
 import os
 import re
+import hashlib
 from pathlib import Path
+
+def startup_problem(folder):
+    """Read only the selected installation's bounded startup log."""
+    if not folder:
+        return None
+    try:
+        with (Path(folder)/'RFGArchipelago'/'Logs'/'General Log.log').open('rb') as log:
+            text=log.read(16384).decode('utf-8',errors='replace')
+    except OSError:
+        return None
+    if 'Unsupported executable' in text:
+        return ('The game log reports an unsupported rfg.exe; the mod did not start its connection. '
+                'Run /diagnose and share the result. If using Steam, verify the game files and restart the game.')
+    return None
+
+def game_diagnostics(folder):
+    if not folder:
+        return 'No game folder selected. Use /game_folder with the folder containing rfg.exe.'
+    try:
+        with (Path(folder)/'rfg.exe').open('rb') as exe:
+            digest=hashlib.file_digest(exe,'sha256').hexdigest().upper()
+    except OSError as error:
+        return f'Cannot read the selected rfg.exe: {error}'
+    problem=startup_problem(folder)
+    return f'rfg.exe SHA256: {digest}\n'+(problem or 'No unsupported-executable error found in the game startup log.')
 
 def steam_game_folders(steam_roots):
     libraries=[]

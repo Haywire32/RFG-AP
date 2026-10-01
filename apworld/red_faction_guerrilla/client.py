@@ -10,9 +10,9 @@ from CommonClient import CommonContext, ClientCommandProcessor, server_loop, get
 import Utils
 from MultiServer import mark_raw
 from . import GAME_NAME, LOCATIONS, LEGACY_ACTIVITIES
-from .catalog import STORY
+from .catalog import STORY, SHOP
 from .client_state import snapshot, journal_checks, identity
-from .client_settings import discover_game_folder
+from .client_settings import discover_game_folder, startup_problem, game_diagnostics
 from .rsl_pipe import RslPipe
 from .progression_catalog import COUNTED_STORIES, FINAL_STORY, SECTORS
 from NetUtils import ClientStatus
@@ -37,6 +37,10 @@ class Commands(ClientCommandProcessor):
     def _cmd_status(self):
         """Show whether this client is connected to the game."""
         self.output(self.ctx.game_status)
+
+    def _cmd_diagnose(self):
+        """Show the selected game's executable fingerprint and startup error."""
+        self.output(game_diagnostics(self.ctx.game_folder))
 
     @mark_raw
     def _cmd_game_folder(self, folder: str):
@@ -74,6 +78,7 @@ class RFGContext(CommonContext):
         self.hud_sequence=0
         self.hud_session=None
         self.finale_notices=set()
+        self.shop_rewards={}
         self.reset_log_reader()
 
     def reset_log_reader(self):
@@ -102,6 +107,7 @@ class RFGContext(CommonContext):
         self.hud_events.clear()
         self.hud_session=None
         self.finale_notices.clear()
+        self.shop_rewards.clear()
         self.reset_log_reader()
 
     async def server_auth(self, password_requested=False):
@@ -144,13 +150,38 @@ class RFGContext(CommonContext):
                 self.hud_events.clear()
                 self.hud_session=connection_identity
             self.slot_data=args['slot_data']
+            self.shop_rewards.clear()
             self.pipe.select('RFGArchipelago', fallback='RSLMainPipe' if self.slot_data.get('progression_protocol')!=2 else None)
             self.history_ready=False
             self.last_snapshot=None
             self.goal_reported=False
-            asyncio.create_task(self.send_msgs([{'cmd':'Sync'}, {'cmd':'Get','keys':['rfg_shopsanity_sync_barrier']}]))
+            shops=sorted(set(SHOP.values()) & (set(self.missing_locations) | set(self.checked_locations)))
+            messages=[{'cmd':'Sync'}, {'cmd':'Get','keys':['rfg_shopsanity_sync_barrier']}]
+            if shops and (self.slot_data or {}).get('shop_reward_visibility',True): messages.append({'cmd':'LocationScouts','locations':shops,'create_as_hint':0})
+            asyncio.create_task(self.send_msgs(messages))
         elif cmd=='Retrieved' and 'rfg_shopsanity_sync_barrier' in args['keys']:
             self.history_ready=True
+        elif cmd=='LocationInfo' and (self.slot_data or {}).get('shop_reward_visibility',True):
+            allowed=set(SHOP.values()) & (set(self.missing_locations) | set(self.checked_locations))
+            for item in args['locations']:
+                if hasattr(item,'_asdict'): item=item._asdict()
+                elif isinstance(item,(list,tuple)): item=dict(zip(('item','location','player','flags'),item))
+                if isinstance(item,dict) and item.get('location') in allowed:
+                    self.shop_rewards[item['location']]=(item['item'],item['player'])
+
+    def shop_descriptions(self):
+        if not (self.slot_data or {}).get('shop_reward_visibility',True): return []
+        def plain(text):
+            return ''.join(' ' if ord(c)<32 or c in '[]' else c for c in text).encode('utf-8',errors='replace').decode('utf-8')
+        result=[]
+        for (row,level),location in SHOP.items():
+            reward=self.shop_rewards.get(location)
+            if reward is None: continue
+            item,player=reward
+            name=plain(self.item_names.lookup_in_slot(item,player))[:120]
+            owner=plain(self.player_names.get(player,f'Player {player}'))[:48]
+            result.append(dict(row=row,level=level,text=f'{name} - {owner}'))
+        return result
 
     def hud_notice(self, text):
         # Limit native text length, strip control characters and game markup.
@@ -242,6 +273,7 @@ class RFGContext(CommonContext):
         await self.report_goal()
         state=snapshot(self.seed_name,self.team,self.slot,self.slot_data,
                        [i.item for i in self.items_received],self.missing_locations,self.checked_locations)
+        state['shop_rewards']=self.shop_descriptions()
         self.current_snapshot=state
         self.queue_finale_notice(state)
         batch=self.hud_events[:32]
@@ -259,10 +291,12 @@ class RFGContext(CommonContext):
             try:
                 await self.poll_game()
             except Exception as ex:
-                notice=str(ex)
+                problem=startup_problem(self.game_folder)
+                notice=problem or str(ex)
                 if notice!=self.last_notice: logger.info('Waiting for RF:G: %s',notice); self.last_notice=notice
                 self.last_snapshot=None
-                self.set_game_status('Game not connected - saved checks still synchronize')
+                self.set_game_status('Game not connected - unsupported executable reported in game log' if problem
+                                     else 'Game not connected - saved checks still synchronize')
             await asyncio.sleep(1)
         self.pipe.close()
 

@@ -1,6 +1,8 @@
 #include "NativeSupport.h"
 #include "LoadoutPolicy.h"
 #include "ApShop.h"
+#include "Garage.h"
+#include "CrashDiagnostics.h"
 #include <bcrypt.h>
 #include <sddl.h>
 #include <fstream>
@@ -30,7 +32,8 @@ template<class F> F SystemFunction(const char* name) {
     const auto module=SystemInput();
     return module ? reinterpret_cast<F>(GetProcAddress(module,name)) : nullptr;
 }
-bool SupportedExecutable(const fs::path& path) {
+bool SupportedExecutable(const fs::path& path,std::string* fingerprint=nullptr) {
+    if(fingerprint) *fingerprint="unavailable (executable could not be verified)";
     if(_wcsicmp(path.filename().c_str(),L"rfg.exe")!=0) return false;
     BCRYPT_ALG_HANDLE algorithm=nullptr;
     if(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0) return false;
@@ -52,6 +55,7 @@ bool SupportedExecutable(const fs::path& path) {
     // Canonical text keeps the supported build auditable in the source.
     std::string actual;
     for(unsigned char value:digest) actual+=fmt::format("{:02X}",value);
+    if(ok && fingerprint) *fingerprint=actual;
     return ok && actual=="0D52039E7F2D3F25A4BE52A2ABA83919456FB3F00E52E75051726247471A2DF4";
 }
 using FrameFn=void(__fastcall*)(Player*);
@@ -65,8 +69,12 @@ bool WeaponTableReady() {
         && *reinterpret_cast<unsigned int*>(Globals::ModuleBase+0x3482c94)>=96;
 }
 void __fastcall Frame(Player* player) {
-    if(player && WeaponTableReady()) ApShop::Frame(player);
+    if(player && WeaponTableReady()) {
+        CrashDiagnostics::Stage stage("AP player reconciliation");
+        ApShop::Frame(player);
+    }
     originalFrame(player);
+    if(player && WeaponTableReady()) Garage::Frame(player);
 }
 void* __cdecl AddItem(void* human,inv_item_info* info,int count,int ammo,int slot,char a,char b,char c) {
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-Globals::ModuleBase+0x400000;
@@ -162,9 +170,13 @@ void InitializeRuntime() {
     exeFolder=executable.parent_path().string()+"/";
     fs::create_directories(executable.parent_path()/"RFGArchipelago"/"Logs");
     logFile.open(executable.parent_path()/"RFGArchipelago"/"Logs"/"General Log.log",std::ios::trunc);
-    Logger::Log("RF:G Archipelago 0.5.0 standalone runtime.\n");
-    if(!SupportedExecutable(executable)) {
+    Logger::Log("RF:G Archipelago 0.6.1: progressive backpack upgrades, expanded ammo and garage fixes.\n");
+    std::string fingerprint;
+    const bool supported=SupportedExecutable(executable,&fingerprint);
+    Logger::Log("rfg.exe SHA256: {}\n",fingerprint);
+    if(!supported) {
         Logger::LogError("Unsupported executable. AP hooks are disabled; system DirectInput is unchanged.\n");
+        Logger::LogError("This mod supports the Re-MARS-tered executable SHA256 0D52039E7F2D3F25A4BE52A2ABA83919456FB3F00E52E75051726247471A2DF4. Verify game files in your store client, then restart. If it persists, share this log and your game store/version.\n");
         return;
     }
     if(GetModuleHandleW(L"RSL.dll")) {
@@ -172,10 +184,11 @@ void InitializeRuntime() {
         return;
     }
     Globals::ModuleBase=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    CrashDiagnostics::Start((executable.parent_path()/"RFGArchipelago"/"Logs"/"Crash.log").c_str(),selfModule);
     Globals::RfgMaxCharges=reinterpret_cast<int*>(Globals::ModuleBase+0x1251568);
     if(MH_Initialize()!=MH_OK) {Logger::LogError("Cannot initialize native hooks.\n");return;}
     IHookManager hooks;
-    bool installed=ApShop::Install(hooks)
+    bool installed=ApShop::Install(hooks) && Garage::Install(hooks)
         && hooks.CreateHook("APPlayerFrame",static_cast<DWORD>(Globals::ModuleBase+0x6d5a80),Frame,originalFrame)
         && hooks.CreateHook("APIntroLoadout",static_cast<DWORD>(Globals::ModuleBase+0x6b5210),AddItem,originalAdd);
     installed=installed && MH_EnableHook(MH_ALL_HOOKS)==MH_OK;

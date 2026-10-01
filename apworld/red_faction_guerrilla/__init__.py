@@ -1,8 +1,12 @@
 from BaseClasses import Item, ItemClassification, Location, Region
 from worlds.AutoWorld import World
 from dataclasses import dataclass
-from Options import PerGameCommonOptions, Range, Toggle
+from Options import PerGameCommonOptions, Range, Toggle, DefaultOnToggle
 from .progression_catalog import SECTORS, SECTOR_ITEMS, STORY_SECTORS, ACTIVITY_SECTORS, COUNTED_STORIES, FINAL_STORY
+from .destruction_catalog import TARGETS, TARGET_SECTORS
+from .vehicle_catalog import VEHICLES
+from .collectible_catalog import COLLECTIBLES, COLLECTIBLE_SECTORS
+from .shop_tiers import SHOP_TIERS
 from .public_yaml import install_template_export
 
 install_template_export()
@@ -21,10 +25,35 @@ class StartWithFastTravel(Toggle):
     """Start with Guerrilla Express. All safehouses are available from the start."""
     display_name = "Start with fast travel"
 
+class ShopRewardVisibility(DefaultOnToggle):
+    """Show the reward item and recipient in each shopsanity purchase description."""
+    display_name = "Shop reward visibility"
+
+class OreChecks(Toggle):
+    """One sector-gated check for each of the 300 ore deposits."""
+    display_name = "Ore deposit checks"
+
+class BillboardChecks(Toggle):
+    """One sector-gated check for each of the 54 propaganda billboards."""
+    display_name = "Propaganda billboard checks"
+
+class RadioTagChecks(Toggle):
+    """One sector-gated check for each of the 36 radio tags."""
+    display_name = "Radio tag checks"
+
+class SupplyCrateChecks(Toggle):
+    """One sector-gated check for each of the 419 campaign EDF supply crates."""
+    display_name = "EDF supply crate checks"
+
 @dataclass
 class RFGOptions(PerGameCommonOptions):
     story_missions_required: StoryMissionsRequired
     start_with_fast_travel: StartWithFastTravel
+    shop_reward_visibility: ShopRewardVisibility
+    ore_checks: OreChecks
+    billboard_checks: BillboardChecks
+    radio_tag_checks: RadioTagChecks
+    supply_crate_checks: SupplyCrateChecks
 
 from worlds.LauncherComponents import Component, Type, components, launch
 
@@ -118,12 +147,30 @@ DIRECT_ITEMS = {
 
 }
 
-SALVAGE_ITEM = "250 Salvage"
+# Registry-only firearms need the same five reserve-ammo tiers as shop weapons.
+# Preserve numeric item identities so existing seeds still reconnect normally.
+AMMO_WEAPONS = {name: entry['definition'] for name, entry in STARTING_WEAPONS.items()}
+for _name, (_id, _command, _definition) in tuple(DIRECT_ITEMS.items()):
+    if _command == 5 and 3 <= _definition <= 18:
+        _progressive = 'Progressive ' + _name
+        WEAPON_FAMILIES[_progressive] = (_id, [200 + _definition])
+        AMMO_WEAPONS[_progressive] = _definition
+        del DIRECT_ITEMS[_name]
+
+SALVAGE_ITEM = "Medium Cache (200 Salvage)"
+SALVAGE_CACHES = {"Small Cache (50 Salvage)": (BASE_ID+1100, 50),
+                  "Medium Cache (200 Salvage)": (BASE_ID+1101, 200),
+                  "Large Cache (400 Salvage)": (BASE_ID+1102, 400)}
+BACKPACK_UPGRADES = {"Progressive Backpack Recharge": BASE_ID+1300,
+                     "Progressive Backpack Power": BASE_ID+1301}
 ITEMS = {name: item_id for name, (item_id, _) in WEAPON_FAMILIES.items()}
 ITEMS.update({name: item_id for name, (item_id, _, _) in DIRECT_ITEMS.items()})
-# 1100 remains reserved for historical 100 Salvage receipts.
+# Cache numeric identities stay stable across releases.
 ITEMS[SALVAGE_ITEM] = BASE_ID + 1101
 ITEMS.update(SECTOR_ITEMS)
+ITEMS.update(VEHICLES)
+ITEMS.update(BACKPACK_UPGRADES)
+ITEMS.update({name:value[0] for name,value in SALVAGE_CACHES.items()})
 
 TRANSPORTER_NUMBERS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19)
 HEAVY_METAL_NUMBERS = (1, 2, 4, 5, 6, 7, 8, 9, 10)
@@ -275,6 +322,9 @@ for old_name,id in list(LOCATIONS.items()):
 LOCATIONS['Shop: Jetpack']=BASE_ID+365
 LOCATIONS['Shop: Jetpack Recharge']=BASE_ID+366
 
+LOCATIONS.update({name: id for id,name,sector,handle in TARGETS})
+LOCATIONS.update({r[1]:r[0] for r in COLLECTIBLES})
+
 class RFGWorld(World):
     """Sector access and a configurable story-count finale."""
 
@@ -285,6 +335,9 @@ class RFGWorld(World):
     options: RFGOptions
 
     def generate_early(self) -> None:
+        self.collectible_checks = [r[0] for r in COLLECTIBLES if getattr(self.options,r[4])]
+        self.active_locations = {name:id for name,id in LOCATIONS.items()
+                                 if id not in COLLECTIBLE_SECTORS or id in self.collectible_checks}
         self.starting_family = self.random.choice(tuple(STARTING_WEAPONS))
         self.starting_weapon = STARTING_WEAPONS[self.starting_family]
         if self.options.start_with_fast_travel:
@@ -302,6 +355,9 @@ class RFGWorld(World):
                 sequence = [base, *later]
             if name == self.starting_family:
                 sequence = sequence[1:]
+            # Extra carrying capacity follows every native weapon upgrade.
+            if name in AMMO_WEAPONS:
+                sequence += [100 + AMMO_WEAPONS[name]] * 5
             self.weapon_sequences[str(item_id)] = {
                 "name": name,
                 "indices": sequence,
@@ -318,11 +374,15 @@ class RFGWorld(World):
         for sector, region in regions.items():
             menu.connect(region, rule=(lambda state: True) if sector == "Parker" else
                          (lambda state, item=sector+" Sector": state.has(item, self.player)))
-        for name, address in LOCATIONS.items():
+        for name, address in self.active_locations.items():
             if name.startswith("Shop:"):
                 sector = "Parker"  # Every upgrade table offers the same paid checks.
             elif name.startswith("Story Mission:"):
                 sector = STORY_SECTORS[address]
+            elif address in COLLECTIBLE_SECTORS:
+                sector = COLLECTIBLE_SECTORS[address]
+            elif address in TARGET_SECTORS:
+                sector = TARGET_SECTORS[address]
             else:
                 internal = ACTIVITY_INTERNALS[address]
                 sector = ACTIVITY_SECTORS[internal]
@@ -350,21 +410,47 @@ class RFGWorld(World):
         for name in SECTOR_ITEMS:
             self.multiworld.itempool.append(self.create_item(name))
             real_item_count += 1
-        for _ in range(len(LOCATIONS) - real_item_count):
-            self.multiworld.itempool.append(self.create_item(SALVAGE_ITEM))
+        for name in VEHICLES:
+            self.multiworld.itempool.append(self.create_item(name))
+            real_item_count += 1
+        for name in BACKPACK_UPGRADES:
+            for _ in range(5):
+                self.multiworld.itempool.append(self.create_item(name))
+                real_item_count += 1
+        filler_count = len(self.active_locations) - real_item_count
+        if filler_count < 0:
+            raise ValueError("Not enough locations for the RF:G item pool")
+        # Exact proportions avoid an unlucky seed consisting mostly of large caches.
+        large = filler_count // 10
+        medium = filler_count * 4 // 10
+        for name,count in (("Large Cache (400 Salvage)",large),("Medium Cache (200 Salvage)",medium),
+                           ("Small Cache (50 Salvage)",filler_count-large-medium)):
+            self.multiworld.itempool.extend(self.create_item(name) for _ in range(count))
 
     def create_item(self, name: str) -> RFGItem:
         classification = (
-            ItemClassification.filler if name == SALVAGE_ITEM
+            ItemClassification.filler if name in SALVAGE_CACHES
+            else ItemClassification.useful if name in VEHICLES or name in BACKPACK_UPGRADES
             else ItemClassification.progression
         )
         return RFGItem(name, classification, ITEMS[name], self.player)
+
+    @classmethod
+    def stage_fill_hook(cls, multiworld, progitempool, usefulitempool, filleritempool, fill_locations):
+        # Fill constrained shops before unrestricted checks consume their eligible
+        # rewards. Preserve shuffled order within each group; the normal fill
+        # still enforces reachability, player restrictions and item rules.
+        fill_locations.sort(key=lambda location: not (
+            location.game == cls.game and location.name.startswith("Shop:")))
 
     def set_rules(self) -> None:
         # Sector access must never depend on paying for shop checks.
         for location in self.get_locations():
             if location.name.startswith('Shop:'):
-                location.item_rule=lambda item: item.name not in SECTOR_ITEMS
+                location.item_rule=lambda item: item.name not in SECTOR_ITEMS and item.name not in SALVAGE_CACHES
+                tier = SHOP_TIERS[location.address]
+                location.access_rule=lambda state,tier=tier: 1 + sum(
+                    state.has(name,self.player) for name in SECTOR_ITEMS) >= tier
         requirement = self.options.story_missions_required.value
         finale_rule = lambda state: state.has("Story Mission Completed", self.player, requirement)
         self.get_location("Story Mission: Mars Attacks").access_rule = finale_rule
@@ -373,11 +459,17 @@ class RFGWorld(World):
 
     def fill_slot_data(self) -> dict:
         return {
-            "protocol_version": 5,
+            "protocol_version": 6,
+            "vehicle_items": {str(id):id for id in VEHICLES.values()},
+            "backpack_upgrade_items": {str(id):name for name,id in BACKPACK_UPGRADES.items()},
+            "collectible_checks": self.collectible_checks,
+            "shop_tiers": True,
             "shopsanity_protocol": 2,
             "progression_protocol": 2,
+            "destruction_checks": [t[0] for t in TARGETS],
             "story_missions_required": self.options.story_missions_required.value,
             "start_with_fast_travel": bool(self.options.start_with_fast_travel),
+            "shop_reward_visibility": bool(self.options.shop_reward_visibility),
             "sector_items": {str(item): SECTORS.index(name.removesuffix(" Sector")) for name,item in SECTOR_ITEMS.items()},
             # Gameplay capacity comes from the seed and received items only.
             "remote_charge_base_capacity": 2,
@@ -392,9 +484,8 @@ class RFGWorld(World):
                     }
                     for name, (item_id, command, value) in DIRECT_ITEMS.items()
                 },
-                str(ITEMS[SALVAGE_ITEM]): {
-                    "name": SALVAGE_ITEM, "command": 1, "value": 250
-                },
+                **{str(id): {"name":name,"command":1,"value":amount}
+                   for name,(id,amount) in SALVAGE_CACHES.items()},
             },
         }
 

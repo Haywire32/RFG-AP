@@ -7,4 +7,5 @@ bool Install(IHookManager& hooks);
 bool AcceptSnapshot(const std::string& payload, std::string& error);
 void Frame(Player* player);
 bool Active();
+bool VehicleUnlocked(int item);
 }
