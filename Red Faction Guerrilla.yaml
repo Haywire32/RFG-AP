@@ -1,17 +1,17 @@
-# Red Faction: Guerrilla Re-Mars-tered â€” Archipelago 0.6.0
+# Red Faction: Guerrilla Re-Mars-tered â€” Archipelago 0.6.2
 # Change the player name before generating. Weights of 0 disable a choice;
 # weights of 50 select it. If several choices have weight 50, one is chosen
 # randomly when generating the seed.
 name: Player{number}
 
 
-description: Red Faction Guerrilla 0.6.0
+description: Red Faction Guerrilla 0.6.2
 game:
   "Red Faction: Guerrilla Re-Mars-tered": 50
 requires:
   version: "0.6.7"
   game:
-    "Red Faction: Guerrilla Re-Mars-tered": "0.6.0"
+    "Red Faction: Guerrilla Re-Mars-tered": "0.6.2"
 
 "Red Faction: Guerrilla Re-Mars-tered":
   # Complete a set amount of story missions before Mars Attacks becomes available.
@@ -50,7 +50,7 @@ requires:
     "false": 0
     "true": 50
 
-  # Each collectible is a check; sectors gate when checks are sent.
+  # Enable collectibles as checks. These are gated by sector unlocks.
   ore_checks:
     "false": 50
     "true": 0
@@ -64,6 +64,23 @@ requires:
     "false": 50
     "true": 0
 
+  # The garage system allows spawning unlocked vehicles. Enable this if you want vehicle spawn to cost salvage. Salvage per spawn: regular vehicles 50, turret vehicles 100, walkers and gunships 200.
+  vehicle_spawn_costs:
+    'false': 50
+    'true': 0
+
+  # Choose whether the EDF gunship appears as an AP item, or as a purchase in the garage.
+  gunship_unlock:
+    item: 50
+    purchase: 0
+
+  # If EDF gunship is set to purchase, choose how much salvage it will cost to unlock.
+  gunship_purchase_cost:
+    500: 0
+    1000: 50
+    2000: 0
+    5000: 0
+
   # Standard Archipelago options.
   progression_balancing:
     0: 0
@@ -72,4 +89,3 @@ requires:
   accessibility:
     full: 50
     minimal: 0
-

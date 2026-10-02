@@ -17,7 +17,7 @@ inline constexpr Point Points[]={
 };
 inline const Point* Find(uint32_t node) {for(const auto& p:Points) if(p.node==node) return &p;return nullptr;}
 inline bool Family(const char* name) {
-    for(const char* family:{"EDF APC","Heavy tank","Medium tank","Artillery tank","Heavy walker","Light walker","Combat walker","Bus","Flatbed","Supply truck","EDF supply","Garbage truck","Dump truck","Fuel tanker"})
+    for(const char* family:{"EDF APC","Heavy tank","Medium tank","Artillery tank","Heavy walker","Light walker","Combat walker","Bus","Flatbed","Supply truck","EDF supply","Garbage truck","Dump truck","Fuel tanker","Gunship"})
         if(std::strcmp(name,family)==0) return true;
     return false;
 }

@@ -31,6 +31,7 @@ inline constexpr Vehicle Vehicles[] = {
     {"Supercar",867531425},
     {"Supply truck",867531426},
     {"Taxi",867531427},
+    {"Gunship",867531428},
 };
 inline int Find(const char* name) { for(const auto& v:Vehicles) if(name && std::strcmp(v.family,name)==0) return v.id; return 0; }
 inline bool Valid(int id) { for(const auto& v:Vehicles) if(v.id==id) return true; return false; }

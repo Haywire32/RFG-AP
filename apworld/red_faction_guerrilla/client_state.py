@@ -21,9 +21,13 @@ def snapshot(seed, team, slot, data, items, missing, checked):
     owned, weapons, enabled, paid = [0]*62, [False]*96, [0]*62, [0]*62
     start = data['starting_weapon']
     row, definition = start['upgrade'], start['definition']
-    if BASES.get(row) != definition:
+    if type(row) is not int or type(definition) is not int or not (
+        BASES.get(row) == definition or
+        (row == -1 and definition in (3,4,5,6,7,8,9,10,18,19)) or
+        (row == 39 and definition == -1)):
         raise ValueError('Invalid starting weapon')
-    owned[row], weapons[definition] = 1, True
+    if row >= 0: owned[row] = 1
+    if definition >= 0: weapons[definition] = True
     owned[1] = data.get('remote_charge_base_capacity', 2)-2
     progression = data.get('progression_protocol')
     if progression not in (None, 1, 2): raise ValueError('Unsupported progression protocol')
@@ -99,6 +103,12 @@ def snapshot(seed, team, slot, data, items, missing, checked):
                       backpack_recharge=recharge, backpack_power=power,
                       shop_tiers=True,
                       collectible_checks=sorted(set(collectibles) & (set(missing)|set(checked))))
+    spawn_costs=data.get('vehicle_spawn_costs',False)
+    purchase=data.get('gunship_purchase',False)
+    purchase_cost=data.get('gunship_purchase_cost',1000)
+    if type(spawn_costs) is not bool or type(purchase) is not bool or type(purchase_cost) is not int or not 0<=purchase_cost<=30000:
+        raise ValueError('Invalid garage settings')
+    result.update(vehicle_spawn_costs=spawn_costs, gunship_purchase=purchase, gunship_purchase_cost=purchase_cost)
     targets=data.get('destruction_checks',[])
     if not isinstance(targets,list) or any(type(t) is not int or t not in TARGET_IDS for t in targets):
         raise ValueError('Invalid destruction catalog')

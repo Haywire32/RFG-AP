@@ -10,6 +10,7 @@
 #include "ApShop.h"
 #ifndef APSHOP_NATIVE_TEST
 #include "Garage.h"
+#include "Gunship.h"
 #endif
 #include "ApShopState.h"
 #include "ApStoryCatalog.h"
@@ -47,6 +48,8 @@ struct Snapshot {
     bool shopRewardVisibility = true;
     int progressionVersion = 0;
     bool features060 = false, shopTiers = false;
+    bool vehicleCosts=false,gunshipPurchase=false;
+    int gunshipCost=1000;
     std::set<int> vehicles, collectibleChecks;
     std::array<int,96> ammo{};
     int backpackRecharge=0,backpackPower=0;
@@ -86,6 +89,9 @@ std::array<Entry, 128> entries{};
 std::array<int, 128> offerLevels{}; // zero is a vanilla/local equip action
 std::string journalPath;
 int equippedBackpack=-1;
+bool gunshipPurchased=false;
+struct GaragePayment {Player* player=nullptr;uint32_t handle=0;int price=0;bool unlock=false;};
+GaragePayment garagePayment;
 std::string lastPayload;
 Player* lastPlayer = nullptr;
 int lastPlayTime = -1;
@@ -173,7 +179,11 @@ bool __fastcall LookupShopText(void* catalog,void*,uint32_t key,const wchar_t** 
         *result=found->second.c_str();
         return true;
     }
-    return originalLookupText(catalog,key,result);
+    const bool foundNative=originalLookupText(catalog,key,result);
+#ifndef APSHOP_NATIVE_TEST
+    if(foundNative && result && catalog==Address<void*>(0x02c7fc90)) *result=Gunship::ControlHint(*result);
+#endif
+    return foundNative;
 }
 uint32_t ShopTextKey(const std::wstring& text) {
     const auto existing=shopTextKeys.find(text);
@@ -230,6 +240,7 @@ bool WriteJournal(const Masks& checks, const std::map<int,int>& salvage) {
         j["destroyed_targets"] = destroyedTargets;
         j["destruction_checks"] = completedTargets;
         j["equipped_backpack"] = equippedBackpack;
+        j["gunship_purchased"] = gunshipPurchased;
         j["collected_objects"] = collectedObjects;
         j["collectible_checks"] = completedCollectibles;
         j["salvage"] = Json::object();
@@ -246,6 +257,7 @@ bool WriteJournal(const Masks& checks, const std::map<int,int>& salvage) {
     } catch(...) { return false; }
 }
 bool LoadJournal() {
+    gunshipPurchased=false;
     destroyedTargets.clear(); completedTargets.clear(); targetsDirty=false;
     collectedObjects.clear(); completedCollectibles.clear(); collectibleEvents.clear();
     tagObservations.clear(); collectiblesDirty=false;
@@ -272,6 +284,7 @@ bool LoadJournal() {
         std::ifstream f(readPath);
         Json j; f >> j;
         if(j.at("version") != 2 || j.at("session") != state.session) return false;
+        gunshipPurchased=j.value("gunship_purchased",false);
         equippedBackpack=j.value("equipped_backpack",-1);
         if(equippedBackpack!=-1 && !BackpackRow(equippedBackpack)) return false;
         purchased = j.at("purchased").get<Masks>();
@@ -328,9 +341,22 @@ std::wstring StoryTrackerText() {
         std::to_wstring(state.storyRequired)+L" story missions to unlock the final mission";
 }
 void __fastcall MapRender(void* map,void*) {
+    // Native map renderers apply exploration visibility after points are
+    // registered. Sector ownership replaces that filter for fixed AP actions
+    // and EDF targets, without changing the explored terrain or map filters.
+    std::map<int,unsigned char> iconFlags;
+    if(active && state.progression && (*Address<unsigned*>(0x02bd9328)&0x60)==0x60) {
+        for(const auto& point:ApProgression::ActivityMapPoints) iconFlags.emplace(point.icon,0);
+        iconFlags.emplace(0x36,0);iconFlags.emplace(0x37,0);
+        for(auto& entry:iconFlags) {
+            auto* flags=Address<unsigned char*>(0x02bd03dc+200*entry.first);
+            entry.second=*flags;*flags|=2;
+        }
+    }
     ReconcileMap(map);
     RevealActivityMap(map);
     originalMapRender(map);
+    for(const auto& entry:iconFlags) *Address<unsigned char*>(0x02bd03dc+200*entry.first)=entry.second;
 }
 void __cdecl FullMapMenuRender() {
     originalFullMapMenuRender();
@@ -361,6 +387,9 @@ void __cdecl FullMapMenuRender() {
 void __fastcall MiniMapRender(void* map,void*) {
     ReconcileMap(map);
     originalMiniMapRender(map);
+#ifndef APSHOP_NATIVE_TEST
+    Gunship::RenderHud();
+#endif
 }
 void __cdecl EncodeMapTitle(char* destination,unsigned capacity,const wchar_t* text) {
 #ifdef APSHOP_NATIVE_TEST
@@ -737,8 +766,7 @@ void ReconcileActivities() {
     if(!state.progression) return;
     auto* table=*Address<unsigned char**>(0x0224d02c);
     const int count=*Address<int*>(0x0224d034);
-    if(!table || count<1 || count>512) return;
-    for(int i=0;i<count;++i) {
+    for(int i=0;table && count>0 && count<=512 && i<count;++i) {
         auto* record=table+i*0x50;
         auto* name=*reinterpret_cast<const char**>(record);
         if(!name) continue;
@@ -1122,6 +1150,9 @@ void* TunedTremor(void* info,int power) {
     return copy.data();
 }
 void __cdecl BackpackExplosion(void* info,void* source,void* owner,void* position,void* orientation,void* direction,void* weapon,bool fromServer) {
+#ifndef APSHOP_NATIVE_TEST
+    if(!fromServer) info=Gunship::TuneExplosion(info,owner,weapon);
+#endif
     // 00958350 supplies the local owner for Tremor's mp_quake explosions.
     // Each power tier retains its own definition for queued native explosions.
     if(active && state.features060 && state.backpackPower>0 && lastPlayer && owner==lastPlayer && info &&
@@ -1314,7 +1345,45 @@ void Reconcile(Player* player,bool force) {
 }
 }
 bool Active() { return active.load(); }
-bool VehicleUnlocked(int item) { return active && state.features060 && state.vehicles.count(item); }
+bool VehicleUnlocked(int item) {
+    return active && state.features060 && (state.vehicles.count(item) ||
+        (item==867531428 && state.gunshipPurchase && gunshipPurchased));
+}
+bool VehiclePurchasable(int item) {
+    return active && state.features060 && item==867531428 && state.gunshipPurchase && !VehicleUnlocked(item);
+}
+int GarageSalvage() {return active && lastPlayer ? lastPlayer->Metadata.Salvage : 0;}
+int GaragePrice(int item,int spawnPrice) {
+    if(VehiclePurchasable(item)) return state.gunshipCost;
+    if(!VehicleUnlocked(item)) return -1;
+    return state.vehicleCosts ? spawnPrice : 0;
+}
+void GarageCancel() {
+    const auto payment=garagePayment;garagePayment={};
+    if(payment.player && ProgressionObject(payment.handle)==payment.player)
+        payment.player->Metadata.Salvage+=payment.price;
+}
+bool GarageReserve(int item,int spawnPrice) {
+    if(garagePayment.player || !active || journalFailed || !lastPlayer) return false;
+    const int price=GaragePrice(item,spawnPrice);
+    if(price<0 || GarageSalvage()<price) return false;
+    garagePayment={lastPlayer,*reinterpret_cast<uint32_t*>(reinterpret_cast<unsigned char*>(lastPlayer)+0x6c),
+                   price,VehiclePurchasable(item)};
+    lastPlayer->Metadata.Salvage-=price;
+    return true;
+}
+bool GarageCommit() {
+    if(!garagePayment.player) return false;
+    if(ProgressionObject(garagePayment.handle)!=garagePayment.player) {GarageCancel();return false;}
+    if(garagePayment.unlock) {
+        gunshipPurchased=true;
+        if(!WriteJournal(purchased,appliedSalvage)) {
+            gunshipPurchased=false;GarageCancel();return false;
+        }
+    }
+    Logger::Log("Garage: confirmed spawn, charged {} salvage, permanent gunship unlock {}.\n",garagePayment.price,garagePayment.unlock);
+    garagePayment={};return true;
+}
 bool AcceptSnapshot(const std::string& payload,std::string& error) {
     try {
         auto j=Json::parse(payload);
@@ -1347,6 +1416,14 @@ bool AcceptSnapshot(const std::string& payload,std::string& error) {
         const int features=j.value("features_version",0);
         if(features!=0 && features!=6) throw std::runtime_error("unsupported feature protocol");
         next.features060=features==6;
+        next.vehicleCosts=j.value("vehicle_spawn_costs",false);
+        next.gunshipPurchase=j.value("gunship_purchase",false);
+        if(j.find("gunship_purchase_cost")!=j.end() && !j["gunship_purchase_cost"].is_number_integer())
+            throw std::runtime_error("invalid gunship price");
+        next.gunshipCost=j.value("gunship_purchase_cost",1000);
+        if(next.gunshipCost<0 || next.gunshipCost>30000 ||
+           (!next.features060 && (next.vehicleCosts || next.gunshipPurchase)))
+            throw std::runtime_error("invalid garage settings");
         if(next.features060) {
             if(!next.progression) throw std::runtime_error("0.6.0 requires sector progression");
             next.shopTiers=j.at("shop_tiers").get<bool>();
@@ -1374,8 +1451,12 @@ bool AcceptSnapshot(const std::string& payload,std::string& error) {
         next.owned=j.at("owned").get<std::array<int,Rows>>();
         next.weapons=j.at("weapons").get<std::array<bool,96>>();
         next.startDefinition=j.at("start_definition").get<int>(); next.startRow=j.at("start_row").get<int>();
-        if(next.startDefinition<0 || next.startDefinition>=96 || next.startRow<0 || next.startRow>=Rows ||
-           BaseDefinition(next.startRow)!=next.startDefinition) throw std::runtime_error("invalid starting weapon");
+        const bool upgradeStart=next.startRow>=0 && next.startRow<Rows && next.startDefinition>=0 &&
+            BaseDefinition(next.startRow)==next.startDefinition;
+        const bool registryStart=next.startRow==-1 &&
+            ((next.startDefinition>=3 && next.startDefinition<=10) || next.startDefinition==18 || next.startDefinition==19);
+        const bool repairStart=next.startRow==39 && next.startDefinition==-1;
+        if(!upgradeStart && !registryStart && !repairStart) throw std::runtime_error("invalid starting weapon");
         for(int row=0;row<Rows;++row) {
             if((next.enabled[row] & ~CatalogMask(row)) || (next.checked[row] & ~next.enabled[row]) ||
                next.owned[row]<0 || next.owned[row]>MaxLevel(row)) throw std::runtime_error("invalid row state");
@@ -1408,6 +1489,9 @@ bool AcceptSnapshot(const std::string& payload,std::string& error) {
         if(!state.session.empty() && (state.progression!=next.progression || (state.progression &&
            (state.storyRequired!=next.storyRequired || state.progressionVersion!=next.progressionVersion))))
             throw std::runtime_error("progression rules changed within a seed");
+        if(!state.session.empty() && (state.vehicleCosts!=next.vehicleCosts ||
+            state.gunshipPurchase!=next.gunshipPurchase || state.gunshipCost!=next.gunshipCost))
+            throw std::runtime_error("garage rules changed within a seed");
         if(payload==lastPayload) return installed;
         if(!installed) throw std::runtime_error("native shopsanity hooks unavailable");
         for(auto& n:incomingNotices) if(seenNotices.insert(n.id).second) {
@@ -1418,8 +1502,8 @@ bool AcceptSnapshot(const std::string& payload,std::string& error) {
         // The seed's intro loadout must be known before a Player frame exists.
         Globals::ApStartingWeaponDefinition=next.startDefinition;
         Globals::ApStartingWeaponUpgrade=next.startRow;
-        Globals::ApGrantedWeaponDefinitions[next.startDefinition]=true;
-        Globals::ApGrantedUpgradeRows[next.startRow]=true;
+        if(next.startDefinition>=0) Globals::ApGrantedWeaponDefinitions[next.startDefinition]=true;
+        if(next.startRow>=0) Globals::ApGrantedUpgradeRows[next.startRow]=true;
         Globals::ApStartingWeaponConfigured=true;
         sessionKey=next.session;
         configured=true;

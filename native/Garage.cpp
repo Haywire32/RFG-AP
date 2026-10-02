@@ -1,5 +1,7 @@
 #include "NativeSupport.h"
 #include "Garage.h"
+#include "Gunship.h"
+#include "GunshipPolicy.h"
 #include "GaragePolicy.h"
 #include "GarageCatalog.h"
 #include "GarageOutdoor.h"
@@ -39,11 +41,11 @@ struct Spawn {
 };
 static_assert(sizeof(PropBlock)==12);
 static_assert(sizeof(Spawn)==0x5c && offsetof(Spawn,vehicle)==0x58);
-struct Choice {void* info;std::string token;std::wstring label;};
+struct Choice {void* info;std::string token;std::wstring label;int price=50,item=0;};
 std::vector<Choice> choices;
 struct Family {std::string name,token;int category=4,variant=0;std::vector<int> choices;std::vector<const char*> labels;};
 std::vector<Family> families;
-bool FamilyUnlocked(const Family& family) {return ApShop::VehicleUnlocked(ApVehicles::Find(family.name.c_str()));}
+bool FamilyUnlocked(const Family& family) {return ApShop::VehicleUnlocked(ApVehicles::Find(family.name.c_str())) || ApShop::VehiclePurchasable(ApVehicles::Find(family.name.c_str()));}
 struct MenuVariants {std::vector<std::string> tokens;std::vector<const char*> labels;};
 std::map<std::string,MenuVariants> menuVariants;
 const std::vector<const char*>& RetainedVariants(const Family& family) {
@@ -232,6 +234,7 @@ bool ReclaimUnusedSlot(void* target) {
     return false;
 }
 void CancelRequest() {
+    ApShop::GarageCancel();
     unloadingSlotResource=nullptr;
     Release(heldResource);
     ReleaseRequestSlot();
@@ -271,11 +274,12 @@ void BuildCatalog() {
            slot>=*At<int*>(0x016b8ae0)) continue;
         const GarageCatalog::Entry* allowed=nullptr;
         for(const auto& e:GarageCatalog::Entries) if(std::strcmp(e.id,name)==0) {allowed=&e;break;}
-        if(!allowed || allowed->category==4 || kind==1) continue;
+        if(!allowed || !GarageCatalog::Enabled(name) || ((allowed->category==4 || kind==1) && !GunshipPolicy::Supported(name))) continue;
         std::string label=name;
         std::replace(label.begin(),label.end(),'_',' ');
         if(kind==1) label+=" (aircraft)";
         Choice c{info,"AP_GARAGE_VEHICLE_"+std::to_string(i),std::wstring(label.begin(),label.end())};
+        c.price=allowed->price;c.item=ApVehicles::Find(allowed->family);
         Token(c.token,c.label);choices.push_back(std::move(c));
     }
     std::sort(choices.begin(),choices.end(),[](const Choice& a,const Choice& b){return a.label<b.label;});
@@ -301,9 +305,8 @@ void BuildCatalog() {
     Token("AP_GARAGE_TITLE",L"VEHICLE GARAGE");
     Token(categoryTokens[0],L"Cars and rovers");Token(categoryTokens[1],L"Trucks and buses");
     Token(categoryTokens[2],L"EDF combat vehicles");Token(categoryTokens[3],L"Walkers");
-    Token(categoryTokens[4],L"Experimental");Token(categoryTokens[5],L"Utility and off-road");
+    Token(categoryTokens[4],L"Gunships");Token(categoryTokens[5],L"Utility and off-road");
     Token("AP_GARAGE_BACK",L"Back to categories");Token("AP_GARAGE_SPAWN",L"Spawn vehicle");
-    Token("AP_GARAGE_EXPERIMENT_HINT",L"Experimental. Aircraft cannot be flown.");
     Token("AP_GARAGE_OK",L"OK");
     Token("AP_GARAGE_LOCKED",L"No vehicles unlocked");
     Token("AP_GARAGE_CANCEL_LOAD",L"Cancel vehicle request");
@@ -332,6 +335,8 @@ unsigned char __cdecl Select(int handle,int row,int reason) {
             auto& f=families[value];
             if(!FamilyUnlocked(f)) return 1;
             if(f.variant<0 || f.variant>=static_cast<int>(f.choices.size())) return 1;
+            const auto& choice=choices[f.choices[f.variant]];
+            if(!ApShop::GarageReserve(choice.item,choice.price)) {message="Not enough salvage.";return 1;}
             selected=f.choices[f.variant];requestedAt=GetTickCount64();
             if(category>=0) rememberedRow[category]=row;
             Logger::Log("Garage: requested {} at {:08x}.\n",Field<const char*>(choices[selected].info,0),bays[bayIndex].node);
@@ -379,13 +384,21 @@ void __fastcall MenuInput(void* menu,void*) {
 void OpenMenu() {
     BuildCatalog();
     if(choices.empty()) {Logger::Log("Garage: native vehicle catalog is not ready.\n");return;}
-    const std::string bodyKey="AP_GARAGE_MESSAGE_"+std::to_string(text.size());
+    const std::string bodyKey=!message.empty()?"AP_GARAGE_MESSAGE_"+std::to_string(text.size()):
+        "AP_GARAGE_BALANCE_"+std::to_string(ApShop::GarageSalvage())+"_"+std::to_string(category)+"_"+
+        std::to_string(ApShop::VehiclePurchasable(867531428)?ApShop::GaragePrice(867531428,200):-1);
     const bool status=!message.empty();
     if(status) Token(bodyKey,std::wstring(message.begin(),message.end()));
+    else {
+        std::wstring balance=L"Salvage: "+std::to_wstring(ApShop::GarageSalvage());
+        if(category==4 && ApShop::VehiclePurchasable(867531428))
+            balance+=L"    Gunship unlock: "+std::to_wstring(ApShop::GaragePrice(867531428,200));
+        Token(bodyKey,balance);
+    }
     using PopupFn=int(__cdecl*)(int,const char*,const char*,void*,int,char,const char*,const char*,int);
     const bool browsing=!status && selected<0 && category>=0;
     popup=At<PopupFn>(0x008f6c70)(1,browsing?categoryTokens[category]:"AP_GARAGE_TITLE",
-        status?bodyKey.c_str():selected>=0?"AP_GARAGE_LOADING":browsing && category==4?"AP_GARAGE_EXPERIMENT_HINT":"",
+        status?bodyKey.c_str():selected>=0?"AP_GARAGE_LOADING":bodyKey.c_str(),
         reinterpret_cast<void*>(&Select),0,0,browsing?"AP_GARAGE_SPAWN":nullptr,nullptr,0);
     if(popup<0) return;
     auto add=At<int(__cdecl*)(int,const char*,int,int)>(0x008f06e0);
@@ -394,7 +407,6 @@ void OpenMenu() {
     else if(selected>=0) {loadingPopupAt=GetTickCount64();rows[rowCount++]=-4;add(popup,"AP_GARAGE_CANCEL_LOAD",0,0);}
     else if(category<0) {
         for(int i=0;i<6;++i) {
-            if(i==4) continue;
             const bool any=std::any_of(families.begin(),families.end(),[i](const Family& f){return f.category==i && FamilyUnlocked(f);});
             if(any) {rows[rowCount++]=-10-i;add(popup,categoryTokens[i],0,0);}
         }
@@ -408,7 +420,25 @@ void OpenMenu() {
                 auto& f=families[i];if(f.category!=category || !FamilyUnlocked(f)) continue;
                 // Native enum menus support 15 rows, popup row storage is bounded too.
                 if(rowCount>=14 || Field<int>(record,0x14)>=Field<int>(record,0x10)) break;
-                const auto& labels=RetainedVariants(f);
+                Family priced=f;priced.labels.clear();
+                std::vector<std::string> priceTokens;
+                for(int choiceIndex:f.choices) {
+                    const auto& choice=choices[choiceIndex];
+                    const int price=ApShop::GaragePrice(choice.item,choice.price);
+                    std::string key=choice.token+"_PRICE_"+std::to_string(price)+
+                        (ApShop::VehiclePurchasable(choice.item)?"_BUY":"");
+                    const auto* id=Field<const char*>(choice.info,0);
+                    const char* variant="";
+                    for(const auto& entry:GarageCatalog::Entries) if(std::strcmp(id,entry.id)==0) {variant=entry.variant;break;}
+                    std::string label=variant;
+                    if(label=="Machine guns") label="MG";
+                    if(!label.empty() && label.back()>='0' && label.back()<='9' && label.size()>1 && label[label.size()-2]==' ')
+                        label.erase(label.size()-2,1);
+                    label+=" "+std::to_string(price);
+                    Token(key,std::wstring(label.begin(),label.end()));priceTokens.push_back(std::move(key));
+                }
+                for(const auto& key:priceTokens) priced.labels.push_back(key.c_str());
+                const auto& labels=RetainedVariants(priced);
                 const int item=At<EnumFn>(0x008b9260)(list,f.token.c_str(),labels.data(),static_cast<int>(labels.size()),
                     reinterpret_cast<void*>(&VariantChanged),f.variant,1);
                 if(item==-1) break;
@@ -564,6 +594,7 @@ void KeepSpawn(Bay& bay,void* node,void* car,void*& resource) {
         ownedVehicles.push_back({car,resource,bay.car});
     }
     resource=nullptr;
+    Gunship::Track(car);
 }
 bool CreateVehicle(Spawn& params) {
     creatingInfo=params.info;
@@ -602,7 +633,8 @@ void CheckArrival(Bay& bay,void* node) {
             Logger::Log("Garage: vehicle {:08x} activated and stable ({} ms).\n",arrival.handle,elapsed);
             Release(replacement.resource);replacement={};arrival={};selected=-1;
             retiredCar=false;recovering=false;restoreChoice=-1;
-            if(restoring) message="The requested vehicle was unavailable. The previous vehicle was restored.";
+            if(restoring) {ApShop::GarageCancel();message="The requested vehicle was unavailable. The previous vehicle was restored.";}
+            else if(!ApShop::GarageCommit()) message="Payment could not be saved. Salvage refunded.";
             return;
         }
     } else arrival.activeSince=0;
@@ -807,6 +839,7 @@ void SpawnSelected(Player* player) {
 }
 void __cdecl SetState(int state,char uninterruptible) {
     if(state==0 || state==2) {
+        Gunship::Reset();
             // Dismiss our screen on campaign load; immutable labels also survive its fade.
         if(popup>=0 && At<void*(__cdecl*)(int)>(0x008cc350)(popup))
             At<unsigned char(__cdecl*)(int,int)>(0x008dce30)(popup,0);
@@ -830,6 +863,7 @@ int DeleteFrom(void* world,void* object,char flags,uintptr_t caller) {
     if(caller==0x00b51c08 && object && PreserveForEviction(Object(Field<uint32_t>(object,0xac4)))) return 0;
     if(object && Field<unsigned char>(object,0x7e)==3) {
         const auto handle=Field<uint32_t>(object,0x6c);
+        Gunship::Forget(object,handle);
         ForgetVehicle(object,handle);
         auto* creating=creatingInfo.load();
         bool tracked=creating && Field<void*>(object,0x3514)==creating;

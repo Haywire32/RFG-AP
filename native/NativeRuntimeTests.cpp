@@ -42,6 +42,10 @@ namespace Garage {
 bool Install(IHookManager&) {return true;}
 void Frame(Player*) {}
 }
+namespace Gunship {
+bool Install(IHookManager&) {return true;}
+void Frame(Player*) {}
+}
 namespace ApShop {
 bool Install(IHookManager&) {return false;}
 void Frame(Player*) {}

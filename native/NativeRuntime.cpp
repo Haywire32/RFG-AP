@@ -2,6 +2,7 @@
 #include "LoadoutPolicy.h"
 #include "ApShop.h"
 #include "Garage.h"
+#include "Gunship.h"
 #include "CrashDiagnostics.h"
 #include <bcrypt.h>
 #include <sddl.h>
@@ -75,6 +76,7 @@ void __fastcall Frame(Player* player) {
     }
     originalFrame(player);
     if(player && WeaponTableReady()) Garage::Frame(player);
+    if(player && WeaponTableReady()) Gunship::Frame(player);
 }
 void* __cdecl AddItem(void* human,inv_item_info* info,int count,int ammo,int slot,char a,char b,char c) {
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-Globals::ModuleBase+0x400000;
@@ -83,6 +85,11 @@ void* __cdecl AddItem(void* human,inv_item_info* info,int count,int ammo,int slo
     const auto definition=Globals::ApStartingWeaponDefinition;
     if(configured && definition>=0 && definition<96 && WeaponTableReady())
         starting=Globals::WeaponInfos[definition].weapon_inv_item_info;
+    if(configured && definition==-1 && Globals::ApStartingWeaponUpgrade==39 && WeaponTableReady()) {
+        auto* upgrade=static_cast<unsigned char*>(rfg::upgrade_info_get(39));
+        auto* weapon=upgrade ? *reinterpret_cast<weapon_info**>(upgrade+0x218) : nullptr;
+        if(weapon) starting=weapon->weapon_inv_item_info;
+    }
     bool suppress=false;
     inv_item_info* hammer=nullptr;
     if(configured && caller==0x00adafd8 && slot==3 && info && info->name &&
@@ -170,7 +177,7 @@ void InitializeRuntime() {
     exeFolder=executable.parent_path().string()+"/";
     fs::create_directories(executable.parent_path()/"RFGArchipelago"/"Logs");
     logFile.open(executable.parent_path()/"RFGArchipelago"/"Logs"/"General Log.log",std::ios::trunc);
-    Logger::Log("RF:G Archipelago 0.6.1: progressive backpack upgrades, expanded ammo and garage fixes.\n");
+    Logger::Log("RF:G Archipelago 0.6.2.\n");
     std::string fingerprint;
     const bool supported=SupportedExecutable(executable,&fingerprint);
     Logger::Log("rfg.exe SHA256: {}\n",fingerprint);
@@ -188,7 +195,7 @@ void InitializeRuntime() {
     Globals::RfgMaxCharges=reinterpret_cast<int*>(Globals::ModuleBase+0x1251568);
     if(MH_Initialize()!=MH_OK) {Logger::LogError("Cannot initialize native hooks.\n");return;}
     IHookManager hooks;
-    bool installed=ApShop::Install(hooks) && Garage::Install(hooks)
+    bool installed=ApShop::Install(hooks) && Garage::Install(hooks) && Gunship::Install(hooks)
         && hooks.CreateHook("APPlayerFrame",static_cast<DWORD>(Globals::ModuleBase+0x6d5a80),Frame,originalFrame)
         && hooks.CreateHook("APIntroLoadout",static_cast<DWORD>(Globals::ModuleBase+0x6b5210),AddItem,originalAdd);
     installed=installed && MH_EnableHook(MH_ALL_HOOKS)==MH_OK;
@@ -271,3 +278,7 @@ BOOL WINAPI DllMain(HMODULE module,DWORD reason,LPVOID) {
     if(reason==DLL_PROCESS_ATTACH) {selfModule=module;DisableThreadLibraryCalls(module);}
     return TRUE;
 }
+
+
+
+

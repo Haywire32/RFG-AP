@@ -9,7 +9,17 @@ void* GarageTestAddress(uintptr_t);
 #include <cstdlib>
 #include <unordered_map>
 namespace Globals {uintptr_t ModuleBase=0x400000;}
-namespace ApShop {bool allVehicles=true;std::set<int> unlocked;bool VehicleUnlocked(int id) {return id>0 && (allVehicles || unlocked.count(id));}}
+namespace ApShop {
+bool allVehicles=true,purchaseMode=false,fees=false,reserveAllowed=true;std::set<int> unlocked;
+int reservations=0,refunds=0,commits=0;bool reserved=false;
+bool VehiclePurchasable(int id) {return purchaseMode && id==867531428 && !unlocked.count(id);}
+int GarageSalvage() {return 1234;}
+int GaragePrice(int id,int price) {return VehiclePurchasable(id)?1000:fees?price:0;}
+bool GarageReserve(int,int) {if(!reserveAllowed)return false;++reservations;reserved=true;return true;}
+bool GarageCommit() {++commits;reserved=false;return true;}
+void GarageCancel() {if(reserved)++refunds;reserved=false;}
+bool VehicleUnlocked(int id) {return id>0 && (allVehicles || unlocked.count(id));}
+}
 namespace Logger {std::string captured;void Write(const std::string& s) {captured+=s;}}
 namespace {
 int assertions=0;
@@ -105,6 +115,10 @@ int __cdecl AddEnum(int list,const char*,const char* const* labels,int count,voi
     Check(list==42 && labels && count>0 && value>=0 && value<count && enabled==1,"native enum contract");
     Check(callback==reinterpret_cast<void*>(&Garage::VariantChanged),"native left/right callback registered");
     Check(Field<int>(popupRecord,0x14)<15,"enum count respects native row limit");
+    for(int i=0;i<count;++i) {
+        const wchar_t* label=nullptr;
+        Check(Garage::LookupText(Hash(labels[i]),&label) && label && std::wcslen(label)<=13,"price and variant fit native value column");
+    }
     ++enumRows;return 100+enumRows;
 }
 void __cdecl Footer(int,const char* text,int action) {Check(action==0x49,"native primary action legend");footer=text;}
@@ -165,6 +179,7 @@ void Reset() {
     acceptValue=0;consumed=forwarded=0;topGarage=true;blocked=false;
     closedMenus=enumRows=0;highlight=-1;footer=nullptr;
     Logger::captured.clear();
+    ApShop::reservations=ApShop::refunds=ApShop::commits=0;ApShop::reserved=true;ApShop::reserveAllowed=true;
     managerAvailable=true;managerRequests=0;
     std::memset(manager,0,sizeof(manager));evictions=0;
     Field<void**>(manager,0x18)=activeSlots;Field<int>(manager,0x1c)=7;
@@ -338,18 +353,18 @@ int main() {
     for(size_t i=0;i<std::size(GarageCatalog::Entries);++i) {
         auto* info=allInfo.data()+i*0x4bc;
         Field<const char*>(info,0)=GarageCatalog::Entries[i].id;Field<const char*>(info,8)="test.carx";
+        if(GunshipPolicy::Supported(GarageCatalog::Entries[i].id)) Field<int>(info,0xc)=1;
         Check(++nativeIds[GarageCatalog::Entries[i].id]==1,"catalogue native IDs are unique");
     }
     catalog=allInfo.data();catalogCount=static_cast<int>(std::size(GarageCatalog::Entries));BuildCatalog();
     const size_t allowedCount=std::count_if(std::begin(GarageCatalog::Entries),std::end(GarageCatalog::Entries),
-        [](const GarageCatalog::Entry& e){return e.category!=4;});
+        [](const GarageCatalog::Entry& e){return GarageCatalog::Enabled(e.id) && (e.category!=4 || GunshipPolicy::Supported(e.id));});
     Check(choices.size()==allowedCount,"only supported campaign vehicles retained");
-    size_t covered=0;
+    size_t covered=0;ApShop::fees=true;
     for(const auto& e:GarageCatalog::Entries) {
         Check(std::strlen(e.family)<=16 && std::strlen(e.variant)<=13,"compact labels fit the stock columns without rendering mutations");
     }
     for(int group=0;group<6;++group) {
-        if(group==4) continue;
         category=group;selected=-1;OpenMenu();
         Check(enumRows>0 && enumRows<=7 && rowCount==enumRows && actionRows==0,"vehicle browser contains no action row that would swallow Enter");
         Check(footer && std::strcmp(footer,"AP_GARAGE_SPAWN")==0 && highlight==0,"native spawn footer and initial focus");
@@ -370,9 +385,9 @@ int main() {
     }
     Check(covered==allowedCount,"every supported variant is reachable");
     ApShop::allVehicles=false;ApShop::unlocked.clear();selected=-1;category=-1;OpenMenu();
-    Check(rowCount==1 && rows[0]==-1,"empty garage shows no locked vehicles");
+    Check(rowCount==1 && rows[0]==-1,"no vehicle exposed before AP unlock");
     ApShop::unlocked.insert(ApVehicles::Find("Combat walker"));category=-1;OpenMenu();
-    Check(rowCount==1 && rows[0]==-13,"only unlocked walker category is shown");
+    Check(rowCount==1 && rows[0]==-13,"only received walker category appears");
     Select(popup,0,0);OpenMenu();
     Check(rowCount==1 && families[rows[0]].name=="Combat walker","only received vehicle family appears");
     const int combatFamily=rows[0];ApShop::unlocked.clear();Select(popup,0,0);
@@ -380,7 +395,7 @@ int main() {
     ApShop::allVehicles=true;selected=-1;popup=-1;category=3;bayIndex=0;
     bays[0].marker=88;Field<uint32_t>(&player,0xce4)=88;
     Garage::Use(&player,1);
-    Check(category==-1 && rowCount==5,"fresh interaction opens main categories, never previous walker page");
+    Check(category==-1 && rowCount==6,"fresh interaction opens all six main categories, never previous walker page");
     (void)combatFamily;
     category=0;OpenMenu();
     const auto& retained=RetainedVariants(families[rows[0]]);const std::string oldLabel=retained[0];
@@ -513,5 +528,20 @@ int main() {
     Reset();OpenMenu();loadingPopupAt=GetTickCount64()-2001;
     MenuInput(inputMenu,nullptr);
     Check(popup<0 && selected==0 && closedMenus==1,"loading dialog unpauses even when player Frame is suspended");
+    Reset();ApShop::reserveAllowed=false;selected=-1;category=2;OpenMenu();NativeAccept(0);
+    Check(selected<0 && !message.empty() && !loads && !deletes,"insufficient salvage does not touch parked car or load assets");
+    Reset();requestAccepted=false;SpawnSelected(&player);
+    Check(ApShop::refunds==1 && !ApShop::commits,"asset loading failure refunds reservation");
+    Reset();spawnResult=0;SpawnSelected(&player);objects.erase(11);carCount=0;SpawnSelected(&player);Confirm();
+    Check(ApShop::refunds==1 && !ApShop::commits,"restoring original vehicle refunds requested replacement");
+    Reset();SpawnSelected(&player);objects.erase(11);carCount=0;SpawnSelected(&player);Confirm();
+    Check(ApShop::commits==1 && !ApShop::refunds,"charge committed only after stable activation");
+    Reset();resourceState=1;SpawnSelected(&player);CancelRequest();
+    Check(ApShop::refunds==1 && !ApShop::commits,"explicit cancel refunds loading vehicle");
+    ApShop::allVehicles=false;ApShop::purchaseMode=true;
+    Check(FamilyUnlocked(Family{"Gunship"}) && !FamilyUnlocked(Family{"Taxi"}),"purchase gunship is visible without AP item; other vehicles remain locked");
+    Check(!GarageCatalog::Enabled("Col_Taxi_2") && !GarageCatalog::Enabled("Min_Rover-A_1WK"),"reported broken variants disabled");
+    Check(GarageCatalog::Enabled("Min_DumpTruck_1") && !GarageCatalog::Enabled("Min_DumpTruck_2") && !GarageCatalog::Enabled("Min_DumpTruck_3"),"only working dump truck style retained");
+    Check(GarageCatalog::Enabled("Min_SupplyTruck_3") && GarageCatalog::Enabled("Min_SupplyTruck_MG3"),"working supply variants retained");
     std::printf("Garage adapter: %d checks passed.\n",assertions);
 }

@@ -1,7 +1,7 @@
 from BaseClasses import Item, ItemClassification, Location, Region
 from worlds.AutoWorld import World
 from dataclasses import dataclass
-from Options import PerGameCommonOptions, Range, Toggle, DefaultOnToggle
+from Options import PerGameCommonOptions, Range, Toggle, DefaultOnToggle, Choice
 from .progression_catalog import SECTORS, SECTOR_ITEMS, STORY_SECTORS, ACTIVITY_SECTORS, COUNTED_STORIES, FINAL_STORY
 from .destruction_catalog import TARGETS, TARGET_SECTORS
 from .vehicle_catalog import VEHICLES
@@ -45,6 +45,24 @@ class SupplyCrateChecks(Toggle):
     """One sector-gated check for each of the 419 campaign EDF supply crates."""
     display_name = "EDF supply crate checks"
 
+class VehicleSpawnCosts(Toggle):
+    """Charge 50 salvage for unarmed vehicles, 100 for armed vehicles, and 200 for walkers and gunships."""
+    display_name = "Vehicle spawn costs"
+
+class GunshipUnlock(Choice):
+    """Unlock all gunship variants with an Archipelago item or a permanent garage purchase."""
+    display_name = "Gunship unlock"
+    option_item = 0
+    option_purchase = 1
+    default = 0
+
+class GunshipPurchaseCost(Range):
+    """Permanent gunship purchase price. Includes the first spawn; only used in purchase mode."""
+    display_name = "Gunship purchase cost"
+    range_start = 0
+    range_end = 30000
+    default = 1000
+
 @dataclass
 class RFGOptions(PerGameCommonOptions):
     story_missions_required: StoryMissionsRequired
@@ -54,6 +72,9 @@ class RFGOptions(PerGameCommonOptions):
     billboard_checks: BillboardChecks
     radio_tag_checks: RadioTagChecks
     supply_crate_checks: SupplyCrateChecks
+    vehicle_spawn_costs: VehicleSpawnCosts
+    gunship_unlock: GunshipUnlock
+    gunship_purchase_cost: GunshipPurchaseCost
 
 from worlds.LauncherComponents import Component, Type, components, launch
 
@@ -69,7 +90,7 @@ BASE_ID = 867530000
 
 WEAPON_FAMILIES = {
     "Progressive Jetpack": (BASE_ID + 1011, [0, 0]),
-    "Progressive Remote Charges": (BASE_ID + 1001, [2, 2]),
+    "Progressive Remote Charges": (BASE_ID + 1001, [2] + [1] * 10 + [2]),
     "Progressive Arc Welder": (BASE_ID + 1002, [3, 3, 4, 5]),
     "Progressive Grinder": (BASE_ID + 1003, [6, 6, 7, 8]),
     "Progressive Proximity Mines": (BASE_ID + 1004, [9, 9, 10]),
@@ -78,14 +99,10 @@ WEAPON_FAMILIES = {
     "Progressive Nano Rifle": (BASE_ID + 1007, [15, 15, 16]),
     "Reconstructor": (BASE_ID + 1008, [39]),
     "Progressive Armor": (BASE_ID + 1009, [26, 26]),
-    # Unlike the weapon's ownership/upgrades, these values are the actual
-    # gameplay carrying limit sent through IPC command 7.
-    "Progressive Remote Charge Capacity": (BASE_ID + 1010, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+
 }
 
-# These seven upgrade-backed weapons have both a confirmed inventory definition
-# and a confirmed ownership row. Reconstructor is intentionally excluded because
-# it cannot complete the destructive objectives in the playable intro.
+# Upgrade-backed weapons; registry weapons and Reconstructor are added below.
 STARTING_WEAPONS = {
     "Progressive Remote Charges": {"name": "Remote Charges", "definition": 12, "upgrade": 2},
     "Progressive Arc Welder": {"name": "Arc Welder", "definition": 17, "upgrade": 3},
@@ -155,18 +172,23 @@ for _name, (_id, _command, _definition) in tuple(DIRECT_ITEMS.items()):
         _progressive = 'Progressive ' + _name
         WEAPON_FAMILIES[_progressive] = (_id, [200 + _definition])
         AMMO_WEAPONS[_progressive] = _definition
+        STARTING_WEAPONS[_progressive] = {"name": _name, "definition": _definition, "upgrade": -1}
         del DIRECT_ITEMS[_name]
 
+STARTING_WEAPONS['Gutter'] = {"name": 'Gutter', "definition": 19, "upgrade": -1}
+# Resolve Reconstructor from its native upgrade row instead of assuming a
+# weapon-table index. The hammer remains available for tutorial objectives.
+STARTING_WEAPONS['Reconstructor'] = {"name": 'Reconstructor', "definition": -1, "upgrade": 39}
+
+from .economy import SALVAGE_CACHES, scaled_caches
 SALVAGE_ITEM = "Medium Cache (200 Salvage)"
-SALVAGE_CACHES = {"Small Cache (50 Salvage)": (BASE_ID+1100, 50),
-                  "Medium Cache (200 Salvage)": (BASE_ID+1101, 200),
-                  "Large Cache (400 Salvage)": (BASE_ID+1102, 400)}
 BACKPACK_UPGRADES = {"Progressive Backpack Recharge": BASE_ID+1300,
                      "Progressive Backpack Power": BASE_ID+1301}
 ITEMS = {name: item_id for name, (item_id, _) in WEAPON_FAMILIES.items()}
 ITEMS.update({name: item_id for name, (item_id, _, _) in DIRECT_ITEMS.items()})
 # Cache numeric identities stay stable across releases.
 ITEMS[SALVAGE_ITEM] = BASE_ID + 1101
+ITEMS["Progressive Remote Charge Capacity"] = BASE_ID + 1010  # Legacy seeds only.
 ITEMS.update(SECTOR_ITEMS)
 ITEMS.update(VEHICLES)
 ITEMS.update(BACKPACK_UPGRADES)
@@ -344,7 +366,7 @@ class RFGWorld(World):
             self.multiworld.push_precollected(self.create_item('Guerrilla Express'))
         self.weapon_sequences = {}
         for name, (item_id, source_sequence) in WEAPON_FAMILIES.items():
-            if name == "Progressive Remote Charge Capacity":
+            if name == "Progressive Remote Charges":
                 sequence = list(source_sequence)
             elif name == "Progressive Arc Welder":
                 sequence = list(source_sequence)
@@ -404,6 +426,7 @@ class RFGWorld(World):
                 self.multiworld.itempool.append(self.create_item(name))
                 real_item_count += 1
         for name in DIRECT_ITEMS:
+            if name == self.starting_family: continue
             if name=='Guerrilla Express' and self.options.start_with_fast_travel: continue
             self.multiworld.itempool.append(self.create_item(name))
             real_item_count += 1
@@ -411,6 +434,7 @@ class RFGWorld(World):
             self.multiworld.itempool.append(self.create_item(name))
             real_item_count += 1
         for name in VEHICLES:
+            if name == "Gunship" and self.options.gunship_unlock == "purchase": continue
             self.multiworld.itempool.append(self.create_item(name))
             real_item_count += 1
         for name in BACKPACK_UPGRADES:
@@ -420,11 +444,8 @@ class RFGWorld(World):
         filler_count = len(self.active_locations) - real_item_count
         if filler_count < 0:
             raise ValueError("Not enough locations for the RF:G item pool")
-        # Exact proportions avoid an unlucky seed consisting mostly of large caches.
-        large = filler_count // 10
-        medium = filler_count * 4 // 10
-        for name,count in (("Large Cache (400 Salvage)",large),("Medium Cache (200 Salvage)",medium),
-                           ("Small Cache (50 Salvage)",filler_count-large-medium)):
+        self.cache_pool = scaled_caches(filler_count)
+        for name,count in self.cache_pool.items():
             self.multiworld.itempool.extend(self.create_item(name) for _ in range(count))
 
     def create_item(self, name: str) -> RFGItem:
@@ -437,9 +458,13 @@ class RFGWorld(World):
 
     @classmethod
     def stage_fill_hook(cls, multiworld, progitempool, usefulitempool, filleritempool, fill_locations):
-        # Fill constrained shops before unrestricted checks consume their eligible
-        # rewards. Preserve shuffled order within each group; the normal fill
-        # still enforces reachability, player restrictions and item rules.
+        # Give RF:G useful rewards the same placement pass as weapon rewards.
+        # Otherwise progression consumes every constrained shop before vehicles
+        # and backpack buffs ever get considered. Item classifications stay intact.
+        useful = [item for item in usefulitempool if item.game == cls.game]
+        usefulitempool[:] = [item for item in usefulitempool if item.game != cls.game]
+        progitempool.extend(useful)
+        multiworld.random.shuffle(progitempool)
         fill_locations.sort(key=lambda location: not (
             location.game == cls.game and location.name.startswith("Shop:")))
 
@@ -459,7 +484,10 @@ class RFGWorld(World):
 
     def fill_slot_data(self) -> dict:
         return {
-            "protocol_version": 6,
+            "protocol_version": 8,
+            "vehicle_spawn_costs": bool(self.options.vehicle_spawn_costs),
+            "gunship_purchase": self.options.gunship_unlock == "purchase",
+            "gunship_purchase_cost": self.options.gunship_purchase_cost.value,
             "vehicle_items": {str(id):id for id in VEHICLES.values()},
             "backpack_upgrade_items": {str(id):name for name,id in BACKPACK_UPGRADES.items()},
             "collectible_checks": self.collectible_checks,
