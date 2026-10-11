@@ -46,4 +46,4 @@ I'd love feedback in the [Red Faction Guerilla channel](https://discord.com/chan
 The current version is still unstable and most likely has bugs.
 
 ### Disclaimer
-AI assistance was used for reverse engineering and hook implementation. Item and logic mapping, in-game testing, verification, and design decisions were done manually by me.
+AI assistance was used for reverse engineering and hook implementation. The code was originally written manually by me, but has over time been more automated and replaced with AI code. Item and logic mapping, in-game testing, verification, and design decisions were done manually by me. 
