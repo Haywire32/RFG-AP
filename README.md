@@ -46,4 +46,12 @@ I'd love feedback in the [Red Faction Guerilla channel](https://discord.com/chan
 The current version is still unstable and most likely has bugs.
 
 ### Disclaimer
-AI assistance was used for reverse engineering and hook implementation. The code was originally written manually by me, but has over time been more automated and replaced with AI code. Item and logic mapping, in-game testing, verification, and design decisions were done manually by me. 
+I wrote the original mod manually, from version 0.1 through 0.5. I used RSL as the foundation for the original game integration and worked on its C++ code. I used Ghidra to disassemble and reverse engineer the game’s code and identify relevant functions, and Visual Studio to develop and build the mod.
+
+I wrote the initial game hooks, Archipelago client and gear randomization. I also wrote the original shopsanity implementation, with AI later helping to debug and fix it.
+
+ChatGPT/Codex has since helped clean up and restructure the code, rework the hooks and client, and write most of the code for newer features such as the garage and map trackers. Parts of my original implementation have been rewritten or replaced during this work.
+
+I handle item and logic mapping, gameplay design, balancing and in-game testing, with feedback from players. I spend many hours testing, adjusting and retesting changes before release.
+
+I review the code, but I’m not claiming to be an expert in every part of it. The source is public for anyone to inspect. I’m responsible for what I release, supporting players and fixing bugs.
